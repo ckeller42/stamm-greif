@@ -14,5 +14,6 @@ export const de = {
   upload: { title: 'Fotos hochladen', hint: 'Was ist zu sehen? Welches Jahr? Wer ist drauf?',
     caption: 'Beschreibung (optional)', year: 'Jahr (optional)', submit: 'Hochladen',
     success: 'Danke! Deine Fotos werden von einem Kurator geprüft und dann veröffentlicht.',
-    error: 'Hochladen fehlgeschlagen — bitte erneut versuchen.' },
+    error: 'Hochladen fehlgeschlagen — bitte erneut versuchen.',
+    status: { wartet: 'wartet', laedt: 'lädt', fertig: 'fertig', fehler: 'fehler' } },
 } as const
