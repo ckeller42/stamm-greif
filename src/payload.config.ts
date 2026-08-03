@@ -8,10 +8,14 @@ import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 
 import { Users } from './collections/Users'
-import { Media } from './collections/Media'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
+
+const secret = process.env.PAYLOAD_SECRET
+if (!secret) {
+  throw new Error('PAYLOAD_SECRET is required')
+}
 
 export default buildConfig({
   admin: {
@@ -21,10 +25,11 @@ export default buildConfig({
     },
   },
   i18n: { supportedLanguages: { de, en }, fallbackLanguage: 'de' },
-  // filled by later tasks: Users and Media are scaffold defaults required for admin auth
-  collections: [Users, Media],
+  // Users is a scaffold default required for admin auth (admin.user binds to it).
+  // No other collections yet — later tasks own those (e.g. Task 7 adds Photos).
+  collections: [Users],
   editor: lexicalEditor(),
-  secret: process.env.PAYLOAD_SECRET || '',
+  secret,
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },
