@@ -1,0 +1,15 @@
+export const de = {
+  siteName: 'Stamm-Greif-Archiv',
+  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', anmelden: 'Anmelden', abmelden: 'Abmelden' },
+  login: { title: 'Anmelden', email: 'E-Mail', password: 'Passwort', submit: 'Anmelden', error: 'Anmeldung fehlgeschlagen' },
+  invite: { title: 'Willkommen beim Stamm-Greif-Archiv', name: 'Dein Name', submit: 'Konto erstellen',
+    invalid: 'Diese Einladung ist ungültig oder wurde bereits verwendet.' },
+  archiv: { title: 'Archiv', filterJahr: 'Jahr', filterGruppe: 'Gruppe', filterEreignis: 'Ereignis',
+    filterOrt: 'Ort', filterPerson: 'Person', filterTag: 'Schlagwort', empty: 'Keine Fotos gefunden.' },
+  person: { gruppen: 'Gruppen', ereignisse: 'Ereignisse', fotos: 'Fotos' },
+  event: { teilnehmer: 'Teilnehmer', fotos: 'Fotos', reihe: 'Teil der Reihe' },
+  upload: { title: 'Fotos hochladen', hint: 'Was ist zu sehen? Welches Jahr? Wer ist drauf?',
+    caption: 'Beschreibung (optional)', year: 'Jahr (optional)', submit: 'Hochladen',
+    success: 'Danke! Deine Fotos werden von einem Kurator geprüft und dann veröffentlicht.',
+    error: 'Hochladen fehlgeschlagen — bitte erneut versuchen.' },
+} as const

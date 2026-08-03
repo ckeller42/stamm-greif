@@ -1,18 +1,25 @@
-import React from 'react'
-import './styles.css'
+import '@/styles/theme.css'
+import Link from 'next/link'
+import { de } from '@/messages/de'
+import { getUser } from '@/lib/get-user'
+import { LogoutLink } from '@/components/logout-link'
 
-export const metadata = {
-  description: 'A blank template using Payload in a Next.js app.',
-  title: 'Payload Blank Template',
-}
+export const metadata = { title: de.siteName, robots: { index: false, follow: false } }
 
-export default async function RootLayout(props: { children: React.ReactNode }) {
-  const { children } = props
-
+export default async function FrontendLayout({ children }: { children: React.ReactNode }) {
+  const user = await getUser()
   return (
-    <html lang="en">
+    <html lang="de">
       <body>
-        <main>{children}</main>
+        <header style={{ display: 'flex', gap: '1rem', padding: '1rem', alignItems: 'center' }}>
+          <strong style={{ color: 'var(--gold)' }}>{de.siteName}</strong>
+          {user && <Link href="/">{de.nav.archiv}</Link>}
+          {user && <Link href="/hochladen">{de.nav.hochladen}</Link>}
+          {user
+            ? <LogoutLink>{de.nav.abmelden}</LogoutLink>
+            : <Link href="/anmelden">{de.nav.anmelden}</Link>}
+        </header>
+        <main style={{ padding: '1rem' }}>{children}</main>
       </body>
     </html>
   )
