@@ -8,10 +8,6 @@ import { formatRange } from '@/lib/time-range'
 import { PhotoGrid } from '@/components/PhotoGrid'
 import type { Photo } from '@/payload-types'
 
-const membershipRoleLabels: Record<string, string> = {
-  mitglied: 'Mitglied', sippenfuehrer: 'Sippenführer', leiter: 'Leiter',
-}
-
 export default async function PersonPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getUser()
   if (!user) redirect('/anmelden')
@@ -41,7 +37,7 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
           const range = formatRange({ von: m.vonYear, bis: m.bisYear })
           return (
             <li key={m.id}>
-              {group?.name} · {membershipRoleLabels[m.role] ?? m.role}{range && ` · ${range}`}
+              {group?.name} · {de.person.rollen[m.role] ?? m.role}{range && ` · ${range}`}
             </li>
           )
         })}
