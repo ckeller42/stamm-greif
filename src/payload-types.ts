@@ -69,6 +69,9 @@ export interface Config {
   collections: {
     users: User;
     invites: Invite;
+    people: Person;
+    groups: Group;
+    memberships: Membership;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -78,6 +81,9 @@ export interface Config {
   collectionsSelect: {
     users: UsersSelect<false> | UsersSelect<true>;
     invites: InvitesSelect<false> | InvitesSelect<true>;
+    people: PeopleSelect<false> | PeopleSelect<true>;
+    groups: GroupsSelect<false> | GroupsSelect<true>;
+    memberships: MembershipsSelect<false> | MembershipsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -159,6 +165,47 @@ export interface Invite {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "people".
+ */
+export interface Person {
+  id: number;
+  name: string;
+  bio?: string | null;
+  birthYear?: number | null;
+  hidden?: boolean | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "groups".
+ */
+export interface Group {
+  id: number;
+  name: string;
+  stufe: 'meute' | 'sippe' | 'rovertrupp' | 'leiterrunde' | 'stamm';
+  foundedYear?: number | null;
+  dissolvedYear?: number | null;
+  notes?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "memberships".
+ */
+export interface Membership {
+  id: number;
+  person: number | Person;
+  group: number | Group;
+  vonYear?: number | null;
+  bisYear?: number | null;
+  role: 'mitglied' | 'sippenfuehrer' | 'leiter';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -188,6 +235,18 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'invites';
         value: number | Invite;
+      } | null)
+    | ({
+        relationTo: 'people';
+        value: number | Person;
+      } | null)
+    | ({
+        relationTo: 'groups';
+        value: number | Group;
+      } | null)
+    | ({
+        relationTo: 'memberships';
+        value: number | Membership;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -264,6 +323,44 @@ export interface InvitesSelect<T extends boolean = true> {
   role?: T;
   usedBy?: T;
   expiresAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "people_select".
+ */
+export interface PeopleSelect<T extends boolean = true> {
+  name?: T;
+  bio?: T;
+  birthYear?: T;
+  hidden?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "groups_select".
+ */
+export interface GroupsSelect<T extends boolean = true> {
+  name?: T;
+  stufe?: T;
+  foundedYear?: T;
+  dissolvedYear?: T;
+  notes?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "memberships_select".
+ */
+export interface MembershipsSelect<T extends boolean = true> {
+  person?: T;
+  group?: T;
+  vonYear?: T;
+  bisYear?: T;
+  role?: T;
   updatedAt?: T;
   createdAt?: T;
 }
