@@ -20,13 +20,14 @@ describe('invite accept', () => {
       // Payload's generated types still mark it required for create() input.
       collection: 'invites', data: { role: 'mitglied' } as any, overrideAccess: true,
     })
+    const email = `anna${Date.now()}@example.com`
     const res = await fetch('http://localhost:3000/api/invites/accept', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: invite.token, name: 'Anna Test', email: 'anna@example.com', password: 'geheim123' }),
+      body: JSON.stringify({ token: invite.token, name: 'Anna Test', email, password: 'geheim123' }),
     })
     expect(res.status).toBe(200)
     const users = await payload.find({
-      collection: 'users', where: { email: { equals: 'anna@example.com' } }, overrideAccess: true,
+      collection: 'users', where: { email: { equals: email } }, overrideAccess: true,
     })
     expect(users.docs[0]?.role).toBe('mitglied')
     const used = await payload.findByID({ collection: 'invites', id: invite.id, overrideAccess: true })
@@ -36,15 +37,15 @@ describe('invite accept', () => {
   it('rejects an already-used invite with 410', async () => {
     const invite = await payload.create({ collection: 'invites', data: { role: 'mitglied' } as any, overrideAccess: true })
     const body = (email: string) => JSON.stringify({ token: invite.token, name: 'X', email, password: 'geheim123' })
-    await fetch('http://localhost:3000/api/invites/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('one@example.com') })
-    const second = await fetch('http://localhost:3000/api/invites/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body('two@example.com') })
+    await fetch('http://localhost:3000/api/invites/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body(`one${Date.now()}@example.com`) })
+    const second = await fetch('http://localhost:3000/api/invites/accept', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body(`two${Date.now()}@example.com`) })
     expect(second.status).toBe(410)
   })
 
   it('rejects an unknown token with 404', async () => {
     const res = await fetch('http://localhost:3000/api/invites/accept', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token: 'gibtsnicht', name: 'X', email: 'x@example.com', password: 'geheim123' }),
+      body: JSON.stringify({ token: 'gibtsnicht', name: 'X', email: `x${Date.now()}@example.com`, password: 'geheim123' }),
     })
     expect(res.status).toBe(404)
   })
