@@ -54,7 +54,22 @@ export const Photos: CollectionConfig = {
   hooks: {
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
-        if (operation === 'create' && req.user) data.uploader = req.user.id
+        if (operation === 'create' && req.user) {
+          data.uploader = req.user.id
+          const isModerator = req.user.role === 'admin' || req.user.role === 'kurator'
+          // An authenticated non-moderator can never land a new photo already published or
+          // already soft-deleted — moderation and Papierkorb are curator/admin-only actions
+          // taken as a separate, later update. This is the authoritative guard: it runs for
+          // every create by a real user, regardless of entry point (Local API, REST, GraphQL),
+          // and cannot be bypassed by omitting/reshaping fields the way an access-control data
+          // check sometimes can be. (No req.user at all means a trusted/system context, e.g. an
+          // overrideAccess seed/migration — not a mitglied self-publish attempt — so it's left
+          // untouched.)
+          if (!isModerator) {
+            data._status = 'draft'
+            delete data.deletedAt
+          }
+        }
         // recompute hasHiddenPerson from linked people. Partial updates (e.g. the
         // hidden-person sync hook, which only patches `hasHiddenPerson` itself) don't
         // include `people` in `data`, so fall back to the document's existing people.

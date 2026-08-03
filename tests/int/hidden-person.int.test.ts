@@ -15,6 +15,7 @@ import path from 'path'
 let payload: Payload
 let mitgliedA: { id: number }
 let mitgliedB: { id: number }
+let kurator: { id: number }
 
 beforeAll(async () => {
   payload = await getPayload({ config: await config })
@@ -26,6 +27,11 @@ beforeAll(async () => {
   mitgliedB = await payload.create({
     collection: 'users',
     data: { name: 'Mitglied B', email: `b${Date.now()}@example.com`, password: 'geheim123', role: 'mitglied' },
+    overrideAccess: true,
+  })
+  kurator = await payload.create({
+    collection: 'users',
+    data: { name: 'Kurator K', email: `k${Date.now()}@example.com`, password: 'geheim123', role: 'kurator' },
     overrideAccess: true,
   })
 })
@@ -197,5 +203,43 @@ describe('photo update access (uploader cannot bypass curator moderation)', () =
     })
     const check = await payload.findByID({ collection: 'photos', id: draft.id, overrideAccess: true, depth: 0 })
     expect(check.uploader).toBe(mitgliedA.id)
+  })
+})
+
+describe('photo create access (uploader cannot bypass moderation at creation)', () => {
+  it('mitglied create with _status: published results in a draft document', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      filePath: fixture,
+      data: { caption: 'Selbstpublikation', datePrecision: 'unknown', _status: 'published' },
+      user: mitgliedA,
+      overrideAccess: false,
+    })
+    const check = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true })
+    expect(check._status).toBe('draft')
+  })
+
+  it('kurator create with _status: published stays published', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      filePath: fixture,
+      data: { caption: 'Kuratiert veröffentlicht', datePrecision: 'unknown', _status: 'published' },
+      user: kurator,
+      overrideAccess: false,
+    })
+    const check = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true })
+    expect(check._status).toBe('published')
+  })
+
+  it('mitglied create with deletedAt set is stored without deletedAt (create-time self-bin blocked)', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      filePath: fixture,
+      data: { caption: 'Selbstloeschung', datePrecision: 'unknown', deletedAt: new Date().toISOString() },
+      user: mitgliedA,
+      overrideAccess: false,
+    })
+    const check = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true })
+    expect(check.deletedAt).toBeFalsy()
   })
 })
