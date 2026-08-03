@@ -9,7 +9,10 @@ export const syncHiddenPhotos: CollectionAfterChangeHook = async ({ doc, previou
   // just-written, not-yet-committed `hidden` flag.
   const photos = await req.payload.find({
     collection: 'photos',
-    where: { people: { contains: doc.id } },
+    // `in` is the documented relationship-field operator; `contains` is a text/LIKE operator
+    // that happens to also match here under the current adapter but isn't guaranteed to on
+    // another one — this is the central hidden-person control, so use the correct operator.
+    where: { people: { in: [doc.id] } },
     limit: 0,
     pagination: false,
     overrideAccess: true,

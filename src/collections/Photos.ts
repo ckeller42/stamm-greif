@@ -1,6 +1,11 @@
-import type { Access, CollectionConfig, Where } from 'payload'
+import type { Access, CollectionConfig, FieldAccess, Where } from 'payload'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
+
+// Field-level access has a slightly different arg shape than collection-level Access (id can be
+// string | number), so `isKuratorOrAdmin` from access/roles doesn't structurally match here.
+const isKuratorOrAdminField: FieldAccess = ({ req }) =>
+  req.user?.role === 'admin' || req.user?.role === 'kurator'
 
 const canReadPhoto: Access = ({ req: { user } }) => {
   if (!user) return false
@@ -14,16 +19,20 @@ const canReadPhoto: Access = ({ req: { user } }) => {
           { deletedAt: { exists: false } },
         ],
       },
-      { uploader: { equals: user.id } },
+      // Own uploads are always visible regardless of draft/soft-delete status — but consent
+      // revocation is absolute: even the uploader loses sight of a photo once it tags a person
+      // who has been marked hidden.
+      { and: [{ uploader: { equals: user.id } }, { hasHiddenPerson: { not_equals: true } }] },
     ],
   }
   return where
 }
 
-const canUpdatePhoto: Access = ({ req: { user } }) => {
+const canUpdatePhoto: Access = ({ req: { user }, data }) => {
   if (!user) return false
   if (user.role === 'admin' || user.role === 'kurator') return true
-  // uploader may edit while still draft
+  // uploader may edit while still draft — but may not publish or un-delete
+  if (data?._status === 'published') return false
   const where: Where = { and: [{ uploader: { equals: user.id } }, { _status: { equals: 'draft' } }] }
   return where
 }
@@ -75,8 +84,25 @@ export const Photos: CollectionConfig = {
     { name: 'place', type: 'relationship', relationTo: 'places', label: 'Ort' },
     { name: 'tags', type: 'relationship', relationTo: 'tags', hasMany: true, label: 'Schlagwörter' },
     { name: 'contributor', type: 'text', label: 'Beigesteuert von (z. B. gescannt von)' },
-    { name: 'uploader', type: 'relationship', relationTo: 'users', admin: { readOnly: true } },
+    {
+      name: 'uploader',
+      type: 'relationship',
+      relationTo: 'users',
+      admin: { readOnly: true },
+      // admin.readOnly is UI-only; without this, the uploader field is still writable via a
+      // direct API update. Nobody may reassign it after creation (it's server-set on create).
+      access: { update: () => false },
+    },
     { name: 'hasHiddenPerson', type: 'checkbox', defaultValue: false, admin: { hidden: true } },
-    { name: 'deletedAt', type: 'date', label: 'Gelöscht am (Papierkorb)', admin: { position: 'sidebar' } },
+    {
+      name: 'deletedAt',
+      type: 'date',
+      label: 'Gelöscht am (Papierkorb)',
+      admin: { position: 'sidebar' },
+      // Soft delete (Papierkorb) and un-delete are kurator/admin-only. Without this, a mitglied
+      // whose own draft still matches canUpdatePhoto's "own draft" branch could otherwise clear
+      // deletedAt themselves and undo a curator's moderation decision.
+      access: { update: isKuratorOrAdminField },
+    },
   ],
 }
