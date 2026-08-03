@@ -14,6 +14,7 @@ import { Groups } from './collections/Groups'
 import { Invites } from './collections/Invites'
 import { Memberships } from './collections/Memberships'
 import { People } from './collections/People'
+import { Photos } from './collections/Photos'
 import { Places } from './collections/Places'
 import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
@@ -36,8 +37,7 @@ export default buildConfig({
   i18n: { supportedLanguages: { de, en }, fallbackLanguage: 'de' },
   // Users is a scaffold default required for admin auth (admin.user binds to it).
   // Invites powers invite-only onboarding (POST /api/invites/accept).
-  // Later tasks add further collections (e.g. Task 7 adds Photos).
-  collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance],
+  collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance, Photos],
   editor: lexicalEditor(),
   secret,
   typescript: {

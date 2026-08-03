@@ -77,6 +77,7 @@ export interface Config {
     places: Place;
     tags: Tag;
     attendance: Attendance;
+    photos: Photo;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -94,6 +95,7 @@ export interface Config {
     places: PlacesSelect<false> | PlacesSelect<true>;
     tags: TagsSelect<false> | TagsSelect<true>;
     attendance: AttendanceSelect<false> | AttendanceSelect<true>;
+    photos: PhotosSelect<false> | PhotosSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -183,36 +185,61 @@ export interface Person {
   bio?: string | null;
   birthYear?: number | null;
   hidden?: boolean | null;
+  portrait?: (number | null) | Photo;
   updatedAt: string;
   createdAt: string;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "groups".
+ * via the `definition` "photos".
  */
-export interface Group {
+export interface Photo {
   id: number;
-  name: string;
-  stufe: 'meute' | 'sippe' | 'rovertrupp' | 'leiterrunde' | 'stamm';
-  foundedYear?: number | null;
-  dissolvedYear?: number | null;
-  notes?: string | null;
+  caption?: string | null;
+  datePrecision: 'exact' | 'year' | 'decade' | 'unknown';
+  /**
+   * JJJJ-MM-TT, JJJJ oder Jahrzehnt (z. B. 1980)
+   */
+  dateValue?: string | null;
+  dateSortKey?: number | null;
+  people?: (number | Person)[] | null;
+  event?: (number | null) | Event;
+  place?: (number | null) | Place;
+  tags?: (number | Tag)[] | null;
+  contributor?: string | null;
+  uploader?: (number | null) | User;
+  hasHiddenPerson?: boolean | null;
+  deletedAt?: string | null;
   updatedAt: string;
   createdAt: string;
-}
-/**
- * This interface was referenced by `Config`'s JSON-Schema
- * via the `definition` "memberships".
- */
-export interface Membership {
-  id: number;
-  person: number | Person;
-  group: number | Group;
-  vonYear?: number | null;
-  bisYear?: number | null;
-  role: 'mitglied' | 'sippenfuehrer' | 'leiter';
-  updatedAt: string;
-  createdAt: string;
+  _status?: ('draft' | 'published') | null;
+  url?: string | null;
+  thumbnailURL?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  filesize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  focalX?: number | null;
+  focalY?: number | null;
+  sizes?: {
+    thumbnail?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+    web?: {
+      url?: string | null;
+      width?: number | null;
+      height?: number | null;
+      mimeType?: string | null;
+      filesize?: number | null;
+      filename?: string | null;
+    };
+  };
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
@@ -279,6 +306,34 @@ export interface Place {
 export interface Tag {
   id: number;
   name: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "groups".
+ */
+export interface Group {
+  id: number;
+  name: string;
+  stufe: 'meute' | 'sippe' | 'rovertrupp' | 'leiterrunde' | 'stamm';
+  foundedYear?: number | null;
+  dissolvedYear?: number | null;
+  notes?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "memberships".
+ */
+export interface Membership {
+  id: number;
+  person: number | Person;
+  group: number | Group;
+  vonYear?: number | null;
+  bisYear?: number | null;
+  role: 'mitglied' | 'sippenfuehrer' | 'leiter';
   updatedAt: string;
   createdAt: string;
 }
@@ -357,6 +412,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'attendance';
         value: number | Attendance;
+      } | null)
+    | ({
+        relationTo: 'photos';
+        value: number | Photo;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -445,6 +504,7 @@ export interface PeopleSelect<T extends boolean = true> {
   bio?: T;
   birthYear?: T;
   hidden?: T;
+  portrait?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -531,6 +591,60 @@ export interface AttendanceSelect<T extends boolean = true> {
   role?: T;
   updatedAt?: T;
   createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "photos_select".
+ */
+export interface PhotosSelect<T extends boolean = true> {
+  caption?: T;
+  datePrecision?: T;
+  dateValue?: T;
+  dateSortKey?: T;
+  people?: T;
+  event?: T;
+  place?: T;
+  tags?: T;
+  contributor?: T;
+  uploader?: T;
+  hasHiddenPerson?: T;
+  deletedAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+  _status?: T;
+  url?: T;
+  thumbnailURL?: T;
+  filename?: T;
+  mimeType?: T;
+  filesize?: T;
+  width?: T;
+  height?: T;
+  focalX?: T;
+  focalY?: T;
+  sizes?:
+    | T
+    | {
+        thumbnail?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+        web?:
+          | T
+          | {
+              url?: T;
+              width?: T;
+              height?: T;
+              mimeType?: T;
+              filesize?: T;
+              filename?: T;
+            };
+      };
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
