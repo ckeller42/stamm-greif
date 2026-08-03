@@ -7,9 +7,11 @@ export default function InvitePage() {
   const { token } = useParams<{ token: string }>()
   const [name, setName] = useState(''); const [email, setEmail] = useState(''); const [password, setPassword] = useState('')
   const [invalid, setInvalid] = useState(false)
+  const [error, setError] = useState(false)
   const router = useRouter()
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    setError(false)
     const res = await fetch('/api/invites/accept', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token, name, email, password }),
@@ -20,8 +22,13 @@ export default function InvitePage() {
         body: JSON.stringify({ email, password }),
       })
       router.push('/'); router.refresh()
-    } else {
+    } else if (res.status === 404 || res.status === 410) {
+      // Only an unknown or already-used/expired invite means the invite
+      // itself is invalid. Any other failure (400 missing fields, 500 e.g.
+      // duplicate email) is a correctable input error — keep the form.
       setInvalid(true)
+    } else {
+      setError(true)
     }
   }
   return (
@@ -35,6 +42,7 @@ export default function InvitePage() {
           <label>{de.login.email}<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required /></label>
           <label>{de.login.password}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label>
           <button type="submit">{de.invite.submit}</button>
+          {error && <p role="alert">{de.invite.error}</p>}
         </>
       )}
     </form>

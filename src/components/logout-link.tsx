@@ -7,7 +7,13 @@ import { useRouter } from 'next/navigation'
 export function LogoutLink({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   async function logout() {
-    await fetch('/api/users/logout', { method: 'POST' })
+    try {
+      await fetch('/api/users/logout', { method: 'POST' })
+    } catch {
+      // Network failure logging out — still clear the client-side view by
+      // redirecting; the server-side cookie may or may not have been
+      // cleared, but leaving the user stuck on a stale page is worse.
+    }
     router.push('/')
     router.refresh()
   }
