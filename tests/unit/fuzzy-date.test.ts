@@ -22,4 +22,16 @@ describe('parseFuzzyDate', () => {
     expect(parseFuzzyDate({ precision: 'exact', value: 'kaputt' }))
       .toEqual({ sortKey: null, label: 'Datum unbekannt' })
   })
+  it('invalid month (13) -> treated as unknown', () => {
+    expect(parseFuzzyDate({ precision: 'exact', value: '1989-13-45' }))
+      .toEqual({ sortKey: null, label: 'Datum unbekannt' })
+  })
+  it('invalid day (30 Feb) -> treated as unknown', () => {
+    expect(parseFuzzyDate({ precision: 'exact', value: '1989-02-30' }))
+      .toEqual({ sortKey: null, label: 'Datum unbekannt' })
+  })
+  it('valid leap year Feb 29 -> full sortKey and German label', () => {
+    expect(parseFuzzyDate({ precision: 'exact', value: '2020-02-29' }))
+      .toEqual({ sortKey: 20200229, label: '29.02.2020' })
+  })
 })

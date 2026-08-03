@@ -10,6 +10,14 @@ export function parseFuzzyDate(fd: FuzzyDate): { sortKey: number | null; label: 
       const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v)
       if (!m) return { ...UNKNOWN }
       const [, y, mo, d] = m
+      const year = Number(y)
+      const month = Number(mo)
+      const day = Number(d)
+      // Validate calendar correctness via Date round-trip
+      const date = new Date(Date.UTC(year, month - 1, day))
+      if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+        return { ...UNKNOWN }
+      }
       return { sortKey: Number(`${y}${mo}${d}`), label: `${d}.${mo}.${y}` }
     }
     case 'year': {
