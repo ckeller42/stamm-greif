@@ -43,12 +43,13 @@ export default async function ArchivPage({
     and.push({ people: { in: personIds.length ? personIds : ['0'] } })
   }
 
+  const page = Math.max(1, Number(params.seite) || 1)
   const photos = await payload.find({
     collection: 'photos',
     where: and.length ? { and } : {},
     sort: '-dateSortKey',
     limit: 60,
-    page: Number(params.seite) || 1,
+    page,
     overrideAccess: false,
     user,
   })
