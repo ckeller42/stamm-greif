@@ -7,6 +7,7 @@ import { buildConfig } from 'payload'
 import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 
+import { Invites } from './collections/Invites'
 import { Users } from './collections/Users'
 
 const filename = fileURLToPath(import.meta.url)
@@ -26,8 +27,9 @@ export default buildConfig({
   },
   i18n: { supportedLanguages: { de, en }, fallbackLanguage: 'de' },
   // Users is a scaffold default required for admin auth (admin.user binds to it).
-  // No other collections yet — later tasks own those (e.g. Task 7 adds Photos).
-  collections: [Users],
+  // Invites powers invite-only onboarding (POST /api/invites/accept).
+  // Later tasks add further collections (e.g. Task 7 adds Photos).
+  collections: [Users, Invites],
   editor: lexicalEditor(),
   secret,
   typescript: {
