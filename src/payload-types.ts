@@ -72,6 +72,11 @@ export interface Config {
     people: Person;
     groups: Group;
     memberships: Membership;
+    events: Event;
+    'event-series': EventSery;
+    places: Place;
+    tags: Tag;
+    attendance: Attendance;
     'payload-kv': PayloadKv;
     'payload-locked-documents': PayloadLockedDocument;
     'payload-preferences': PayloadPreference;
@@ -84,6 +89,11 @@ export interface Config {
     people: PeopleSelect<false> | PeopleSelect<true>;
     groups: GroupsSelect<false> | GroupsSelect<true>;
     memberships: MembershipsSelect<false> | MembershipsSelect<true>;
+    events: EventsSelect<false> | EventsSelect<true>;
+    'event-series': EventSeriesSelect<false> | EventSeriesSelect<true>;
+    places: PlacesSelect<false> | PlacesSelect<true>;
+    tags: TagsSelect<false> | TagsSelect<true>;
+    attendance: AttendanceSelect<false> | AttendanceSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
     'payload-preferences': PayloadPreferencesSelect<false> | PayloadPreferencesSelect<true>;
@@ -206,6 +216,86 @@ export interface Membership {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "events".
+ */
+export interface Event {
+  id: number;
+  name: string;
+  series?: (number | null) | EventSery;
+  place?: (number | null) | Place;
+  story?: {
+    root: {
+      type: string;
+      children: {
+        type: any;
+        version: number;
+        [k: string]: unknown;
+      }[];
+      direction: ('ltr' | 'rtl') | null;
+      format: 'left' | 'start' | 'center' | 'right' | 'end' | 'justify' | '';
+      indent: number;
+      version: number;
+    };
+    [k: string]: unknown;
+  } | null;
+  datePrecision: 'exact' | 'year' | 'decade' | 'unknown';
+  /**
+   * JJJJ-MM-TT, JJJJ oder Jahrzehnt (z. B. 1980)
+   */
+  dateValue?: string | null;
+  dateSortKey?: number | null;
+  endDate?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "event-series".
+ */
+export interface EventSery {
+  id: number;
+  name: string;
+  description?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "places".
+ */
+export interface Place {
+  id: number;
+  name: string;
+  lat?: number | null;
+  lng?: number | null;
+  notes?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "tags".
+ */
+export interface Tag {
+  id: number;
+  name: string;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "attendance".
+ */
+export interface Attendance {
+  id: number;
+  person: number | Person;
+  event: number | Event;
+  role: 'teilnehmer' | 'leiter' | 'koch' | 'sonstige';
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -247,6 +337,26 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'memberships';
         value: number | Membership;
+      } | null)
+    | ({
+        relationTo: 'events';
+        value: number | Event;
+      } | null)
+    | ({
+        relationTo: 'event-series';
+        value: number | EventSery;
+      } | null)
+    | ({
+        relationTo: 'places';
+        value: number | Place;
+      } | null)
+    | ({
+        relationTo: 'tags';
+        value: number | Tag;
+      } | null)
+    | ({
+        relationTo: 'attendance';
+        value: number | Attendance;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -360,6 +470,64 @@ export interface MembershipsSelect<T extends boolean = true> {
   group?: T;
   vonYear?: T;
   bisYear?: T;
+  role?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "events_select".
+ */
+export interface EventsSelect<T extends boolean = true> {
+  name?: T;
+  series?: T;
+  place?: T;
+  story?: T;
+  datePrecision?: T;
+  dateValue?: T;
+  dateSortKey?: T;
+  endDate?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "event-series_select".
+ */
+export interface EventSeriesSelect<T extends boolean = true> {
+  name?: T;
+  description?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "places_select".
+ */
+export interface PlacesSelect<T extends boolean = true> {
+  name?: T;
+  lat?: T;
+  lng?: T;
+  notes?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "tags_select".
+ */
+export interface TagsSelect<T extends boolean = true> {
+  name?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "attendance_select".
+ */
+export interface AttendanceSelect<T extends boolean = true> {
+  person?: T;
+  event?: T;
   role?: T;
   updatedAt?: T;
   createdAt?: T;

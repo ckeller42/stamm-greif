@@ -7,10 +7,15 @@ import { buildConfig } from 'payload'
 import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 
+import { Attendance } from './collections/Attendance'
+import { EventSeries } from './collections/EventSeries'
+import { Events } from './collections/Events'
 import { Groups } from './collections/Groups'
 import { Invites } from './collections/Invites'
 import { Memberships } from './collections/Memberships'
 import { People } from './collections/People'
+import { Places } from './collections/Places'
+import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
 
 const filename = fileURLToPath(import.meta.url)
@@ -31,9 +36,8 @@ export default buildConfig({
   i18n: { supportedLanguages: { de, en }, fallbackLanguage: 'de' },
   // Users is a scaffold default required for admin auth (admin.user binds to it).
   // Invites powers invite-only onboarding (POST /api/invites/accept).
-  // Attendance is registered in Task 6 (depends on the events collection).
   // Later tasks add further collections (e.g. Task 7 adds Photos).
-  collections: [Users, Invites, People, Groups, Memberships],
+  collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance],
   editor: lexicalEditor(),
   secret,
   typescript: {
