@@ -1,0 +1,42 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/getting-started/configure-coderabbit
+# The CodeRabbit GitHub App must be installed on the repo for this to take effect.
+language: en-US
+early_access: false
+
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  # Skip generated/vendored files that carry no reviewable intent.
+  path_filters:
+    - '!pnpm-lock.yaml'
+    - '!src/payload-types.ts'
+    - '!src/payload-generated-schema.ts'
+    - '!src/migrations/**'
+    - '!**/*.min.js'
+  # Domain-specific guidance so review comments land on what actually matters here.
+  path_instructions:
+    - path: 'src/collections/**'
+      instructions: >-
+        Payload collections. Scrutinise access-control functions (read/create/update/delete) and
+        field-level access for privilege-escalation or consent-bypass gaps. Photos visibility must
+        honour draft status, soft-delete (deletedAt), and hasHiddenPerson (consent revocation).
+    - path: 'src/access/**'
+      instructions: >-
+        Role/authorization helpers (admin/kurator/mitglied). Flag any path where a mitglied could
+        gain kurator/admin capabilities or read data they shouldn't.
+    - path: 'tests/**'
+      instructions: >-
+        Tests may use `any` and inline fixtures. Don't nitpick style; focus on whether assertions
+        actually exercise the described behaviour and whether coverage gaps exist.
+
+chat:
+  auto_reply: true
