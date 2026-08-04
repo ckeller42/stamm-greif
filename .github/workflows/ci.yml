@@ -79,15 +79,15 @@ jobs:
         run: pnpm test:int
 
       - name: Stop integration app
-        if: always()
-        # Wait for the port to actually free so the e2e webServer (reuseExistingServer) can't
-        # latch onto the dying int server, which points at the wrong database.
+        # Kill the int app authoritatively and FAIL if port 3000 isn't actually free — a
+        # surviving server points at the test DB and would corrupt the e2e run.
         run: |
-          kill $(lsof -t -i:3000) 2>/dev/null || true
+          lsof -t -i:3000 | xargs -r kill -9 || true
           for i in $(seq 1 15); do
-            lsof -t -i:3000 >/dev/null 2>&1 || { echo "port 3000 free"; break; }
+            lsof -t -i:3000 >/dev/null 2>&1 || { echo "port 3000 free"; exit 0; }
             sleep 1
           done
+          echo "port 3000 still in use after teardown"; lsof -i:3000; exit 1
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium

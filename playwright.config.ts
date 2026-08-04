@@ -37,7 +37,10 @@ export default defineConfig({
   ],
   webServer: {
     command: 'pnpm dev',
-    reuseExistingServer: true,
+    // Locally, reuse a dev server you already have running. In CI, always start a fresh one so
+    // a stale server from an earlier step (e.g. the integration job's app on the test DB) can
+    // never be picked up and answer requests against the wrong database.
+    reuseExistingServer: !process.env.CI,
     url: 'http://localhost:3000',
   },
 })
