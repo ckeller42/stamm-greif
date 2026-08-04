@@ -92,6 +92,13 @@ jobs:
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
+      # Create the schema in the e2e DB up front. Otherwise Playwright's globalSetup (seeding via
+      # Local API) and the webServer's `pnpm dev` both push the schema into a fresh DB at the same
+      # time — a concurrent-DDL race that loses the seed and makes login fail. Locally this never
+      # bit because the dev-db volume already had the schema.
+      - name: Initialize e2e database schema
+        run: pnpm payload migrate
+
       - name: E2E tests
         run: pnpm test:e2e
 
