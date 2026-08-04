@@ -49,3 +49,6 @@ node_modules/
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# E2E seed fixtures written by tests/e2e/global-setup.ts
+tests/e2e/.seed.json
