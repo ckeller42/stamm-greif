@@ -18,6 +18,9 @@ export function LogoutLink({ children }: { children: React.ReactNode }) {
     router.refresh()
   }
   return (
+    // Not page navigation: onClick always preventDefaults and POSTs via fetch (see above). The
+    // href is the POST target for readers; a GET on it would 500, so next/link is wrong here.
+    // eslint-disable-next-line @next/next/no-html-link-for-pages
     <a href="/api/users/logout" onClick={(e) => { e.preventDefault(); void logout() }}>
       {children}
     </a>

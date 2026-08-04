@@ -25,7 +25,7 @@ export default async function globalSetup() {
   const email = `e2e-${stamp}@example.com`
   const password = 'geheim123'
 
-  const user = await payload.create({
+  await payload.create({
     collection: 'users',
     data: { name: 'E2E Mitglied', email, password, role: 'mitglied' },
     overrideAccess: true,
