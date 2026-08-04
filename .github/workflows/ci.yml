@@ -12,12 +12,71 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Static checks + unit + HTTP-driven integration tests. Integration lives here (not with e2e)
+  # because invites.int.test.ts needs a running app server on the TEST database (:5433); keeping
+  # it on its own runner means that server can never be reused by the e2e webServer.
   test:
     name: test
     runs-on: ubuntu-latest
-    # Local dev uses docker-compose.dev.yml for both databases (db on :5432, db-test on :5433).
-    # CI reuses that exact compose file so the test commands need no CI-specific rewiring:
-    # test:int already targets :5433/archiv_test, and the e2e webServer targets :5432/archiv.
+    env:
+      PAYLOAD_SECRET: ci-not-a-real-secret
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable corepack / pin pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.18.0 --activate
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Start test database
+        run: docker compose -f docker-compose.dev.yml up -d db-test
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            docker compose -f docker-compose.dev.yml exec -T db-test pg_isready -U archiv >/dev/null 2>&1 \
+              && { echo "test db ready"; break; }
+            [ "$i" = 30 ] && { echo "test db never came up"; exit 1; }
+            sleep 2
+          done
+
+      - run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      # invites.int.test.ts drives the real /api/invites/accept HTTP endpoint, so the app must be
+      # running against the same database the test writes to (test DB on :5433). The job ends
+      # right after, so this background server is torn down with the runner — no manual cleanup.
+      - name: Start app for integration tests (test DB)
+        run: |
+          DATABASE_URI=postgres://archiv:archiv@localhost:5433/archiv_test pnpm dev \
+            > /tmp/int-app.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:3000/anmelden >/dev/null 2>&1 && { echo "app up"; break; }
+            [ "$i" = 60 ] && { echo "app never came up"; cat /tmp/int-app.log; exit 1; }
+            sleep 2
+          done
+
+      - name: Integration tests
+        run: pnpm test:int
+
+  # End-to-end browser test on its own runner: Playwright manages the app server itself
+  # (reuseExistingServer is off in CI), against the dev database on :5432.
+  e2e:
+    name: e2e
+    runs-on: ubuntu-latest
     env:
       PAYLOAD_SECRET: ci-not-a-real-secret
       DATABASE_URI: postgres://archiv:archiv@localhost:5432/archiv
@@ -37,65 +96,24 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Start databases (dev + test Postgres)
-        run: docker compose -f docker-compose.dev.yml up -d
+      - name: Start dev database
+        run: docker compose -f docker-compose.dev.yml up -d db
 
-      - name: Wait for Postgres (dev + test)
-        # pg_isready runs inside the postgres containers (guaranteed present there, unlike the
-        # runner host), so no postgresql-client install is needed.
+      - name: Wait for Postgres
         run: |
-          for svc in db db-test; do
-            for i in $(seq 1 30); do
-              if docker compose -f docker-compose.dev.yml exec -T "$svc" pg_isready -U archiv >/dev/null 2>&1; then
-                echo "postgres $svc ready"; break
-              fi
-              [ "$i" = 30 ] && { echo "postgres $svc never came up"; exit 1; }
-              sleep 2
-            done
-          done
-
-      - run: pnpm lint
-
-      - name: Typecheck
-        run: pnpm exec tsc --noEmit
-
-      - name: Unit tests
-        run: pnpm test:unit
-
-      # invites.int.test.ts drives the real /api/invites/accept HTTP endpoint, so the app must
-      # be running against the SAME database the test writes to (test DB on :5433). This server
-      # is torn down before the e2e step, which starts its own dev server against the dev DB.
-      - name: Start app for integration tests (test DB)
-        run: |
-          DATABASE_URI=postgres://archiv:archiv@localhost:5433/archiv_test pnpm dev \
-            > /tmp/int-app.log 2>&1 &
-          for i in $(seq 1 60); do
-            curl -sf http://localhost:3000/anmelden >/dev/null 2>&1 && { echo "app up"; break; }
-            [ "$i" = 60 ] && { echo "app never came up"; cat /tmp/int-app.log; exit 1; }
+          for i in $(seq 1 30); do
+            docker compose -f docker-compose.dev.yml exec -T db pg_isready -U archiv >/dev/null 2>&1 \
+              && { echo "dev db ready"; break; }
+            [ "$i" = 30 ] && { echo "dev db never came up"; exit 1; }
             sleep 2
           done
-
-      - name: Integration tests
-        run: pnpm test:int
-
-      - name: Stop integration app
-        # Kill the int app authoritatively and FAIL if port 3000 isn't actually free — a
-        # surviving server points at the test DB and would corrupt the e2e run.
-        run: |
-          lsof -t -i:3000 | xargs -r kill -9 || true
-          for i in $(seq 1 15); do
-            lsof -t -i:3000 >/dev/null 2>&1 || { echo "port 3000 free"; exit 0; }
-            sleep 1
-          done
-          echo "port 3000 still in use after teardown"; lsof -i:3000; exit 1
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
-      # Create the schema in the e2e DB up front. Otherwise Playwright's globalSetup (seeding via
-      # Local API) and the webServer's `pnpm dev` both push the schema into a fresh DB at the same
-      # time — a concurrent-DDL race that loses the seed and makes login fail. Locally this never
-      # bit because the dev-db volume already had the schema.
+      # Create the schema up front so Playwright's globalSetup (Local API seeding) and the
+      # webServer don't both push it into a fresh DB at once — a concurrent-DDL race that would
+      # lose the seed.
       - name: Initialize e2e database schema
         run: pnpm payload migrate
 
@@ -110,12 +128,12 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
+  # Guards the production Docker build path: next build with output:'standalone'. PAYLOAD_SECRET
+  # is a build-time placeholder only (the real one is injected at container runtime), mirroring
+  # the Dockerfile's own build stage.
   build:
     name: build
     runs-on: ubuntu-latest
-    # Guards the production Docker build path: next build with output:'standalone'. PAYLOAD_SECRET
-    # is a build-time placeholder only (the real one is injected at container runtime), mirroring
-    # the Dockerfile's own build stage.
     env:
       PAYLOAD_SECRET: build-time-placeholder-not-used-at-runtime
       NEXT_TELEMETRY_DISABLED: '1'
