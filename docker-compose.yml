@@ -1,43 +1,69 @@
-version: '3'
-
+# Production deployment for one VPS: app (Next/Payload) + Postgres + Caddy (TLS termination).
+# See docs/betrieb.md for Erststart, Backup, Restore, Monitoring. Local verification uses
+# Caddyfile.localhost instead of the production Caddyfile (see that doc's "Verify" section).
 services:
-  payload:
-    image: node:20-alpine
-    ports:
-      - '3000:3000'
+  app:
+    build:
+      context: .
+      target: run
+    restart: unless-stopped
+    environment:
+      DATABASE_URI: postgres://archiv:${DB_PASSWORD}@db:5432/archiv
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
     volumes:
-      - .:/home/node/app
-      - node_modules:/home/node/app/node_modules
-    working_dir: /home/node/app/
-    command: sh -c "corepack enable && corepack prepare pnpm@latest --activate && pnpm install && pnpm dev"
+      # Reality check (Task 14): Photos has no upload.staticDir override, so Payload uses its
+      # default (the collection slug, "photos") resolved relative to process.cwd() — /app in
+      # this image. That's /app/photos, not /app/media as a generic assumption might suggest.
+      - uploads:/app/photos
     depends_on:
-      - mongo
-      # - postgres
-    env_file:
-      - .env
+      db:
+        condition: service_healthy
 
-  # Ensure your DATABASE_URL uses 'mongo' as the hostname ie. mongodb://mongo/my-db-name
-  mongo:
-    image: mongo:latest
-    ports:
-      - '27017:27017'
-    command:
-      - --storageEngine=wiredTiger
+  # One-off schema migration runner. Not part of `docker compose up` (profile "tools" keeps it
+  # out of the default set). Uses the `build` stage, not `run`, because the standalone runtime
+  # image has no pnpm/CLI/source — only the traced production server bundle. See docs/betrieb.md
+  # "Erststart" and "Schema-Änderungen" for when to run this.
+  migrate:
+    build:
+      context: .
+      target: build
+    profiles: ['tools']
+    environment:
+      DATABASE_URI: postgres://archiv:${DB_PASSWORD}@db:5432/archiv
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+      NODE_ENV: production
+      PAYLOAD_MIGRATING: 'true'
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ['pnpm', 'payload', 'migrate']
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: archiv
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: archiv
     volumes:
-      - data:/data/db
-    logging:
-      driver: none
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U archiv -d archiv']
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  # Uncomment the following to use postgres
-  # postgres:
-  #   restart: always
-  #   image: postgres:latest
-  #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
-  #   ports:
-  #     - "5432:5432"
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - app
 
 volumes:
-  data:
-  # pgdata:
-  node_modules:
+  uploads: {}
+  db-data: {}
+  caddy-data: {}

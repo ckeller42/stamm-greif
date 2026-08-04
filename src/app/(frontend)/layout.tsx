@@ -5,6 +5,10 @@ import { getUser } from '@/lib/get-user'
 import { LogoutLink } from '@/components/logout-link'
 
 export const metadata = { title: de.siteName, robots: { index: false, follow: false } }
+// Every page under this layout reads the session via getUser(), so it must never be statically
+// prerendered/cached — force-dynamic also lets `next build` skip executing this tree at build
+// time (avoiding a real DB connection during the Docker build), see docs/betrieb.md.
+export const dynamic = 'force-dynamic'
 
 export default async function FrontendLayout({ children }: { children: React.ReactNode }) {
   const user = await getUser()

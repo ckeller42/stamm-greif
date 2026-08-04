@@ -1,0 +1,12 @@
+# Override for verifying the production compose stack (docker-compose.yml) on a workstation,
+# without a real domain or TLS certificate. Task 14, Step 5.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+#
+# Swaps in Caddyfile.localhost (plain :80, no automatic HTTPS) instead of the production
+# Caddyfile (archiv.stamm-greif.de). Not used in production and not referenced by betrieb.md's
+# deploy steps — only for local smoke-testing this file set.
+services:
+  caddy:
+    volumes:
+      - ./Caddyfile.localhost:/etc/caddy/Caddyfile:ro

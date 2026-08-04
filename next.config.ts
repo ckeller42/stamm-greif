@@ -7,6 +7,8 @@ const __filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(__filename)
 
 const nextConfig: NextConfig = {
+  // Enables the .next/standalone output consumed by the production Dockerfile (Task 14).
+  output: 'standalone',
   images: {
     localPatterns: [
       {

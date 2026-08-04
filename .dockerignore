@@ -1,0 +1,39 @@
+# Dependencies & build output (reinstalled/rebuilt inside the image)
+node_modules
+.next
+.remember
+
+# Env files — never bake secrets into the image; supplied at runtime via compose
+.env
+.env*.local
+test.env
+
+# Uploaded media (mounted as a volume at runtime, not part of the image)
+/photos
+/media
+
+# VCS / editor / tooling
+.git
+.gitignore
+.vscode
+.idea
+
+# Docs & planning artifacts not needed to build the app
+docs
+.superpowers
+
+# Tests & coverage
+tests
+coverage
+playwright-report
+test-results
+blob-report
+playwright/.cache
+
+# Misc
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+*.tsbuildinfo
