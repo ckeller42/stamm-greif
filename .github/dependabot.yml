@@ -1,0 +1,17 @@
+version: 2
+updates:
+  # npm: security PRs fire immediately on vulnerability alerts regardless of this
+  # schedule (Dependabot behavior). The daily interval only controls regular
+  # version-update checks; minor/patch bumps bundle into one PR via the group below.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
