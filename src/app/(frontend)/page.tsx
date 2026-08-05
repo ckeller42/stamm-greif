@@ -64,7 +64,10 @@ export default async function ArchivPage({
     and.push({ people: { in: personIds.length ? personIds : ['0'] } })
   }
 
-  const page = Math.max(1, Number(single.seite) || 1)
+  // Only a positive safe integer is a valid page; 2.5, Infinity, NaN, 0 and negatives fall
+  // back to 1 rather than reaching payload.find as a bad offset.
+  const seiteNum = Number(single.seite)
+  const page = Number.isSafeInteger(seiteNum) && seiteNum > 0 ? seiteNum : 1
   const photos = await payload.find({
     collection: 'photos',
     where: and.length ? { and } : {},
