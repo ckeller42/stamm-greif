@@ -55,10 +55,33 @@ export default async function globalSetup() {
     overrideAccess: true,
   })
 
+  // Second member + kurator for the upload/moderation journey; unused invite for the invite
+  // journey. Same unique-per-run discipline as the rest of the seeds.
+  const memberB = { email: `e2e-b-${stamp}@example.com`, password }
+  await payload.create({
+    collection: 'users',
+    data: { name: 'E2E Mitglied B', email: memberB.email, password, role: 'mitglied' },
+    overrideAccess: true,
+  })
+  const kurator = { email: `e2e-k-${stamp}@example.com`, password }
+  await payload.create({
+    collection: 'users',
+    data: { name: 'E2E Kurator', email: kurator.email, password, role: 'kurator' },
+    overrideAccess: true,
+  })
+  const invite = await payload.create({
+    collection: 'invites',
+    // token has a runtime defaultValue (crypto.randomUUID) but the generated type marks it
+    // required for create() input — same cast the int tests use.
+    data: { role: 'mitglied' } as never,
+    overrideAccess: true,
+  })
+
   writeFileSync(
     SEED_FILE,
     JSON.stringify(
-      { email, password, personId: person.id, eventId: event.id, caption, photoId: photo.id },
+      { email, password, personId: person.id, eventId: event.id, caption, photoId: photo.id,
+        inviteToken: invite.token, memberB, kurator },
       null,
       2,
     ),
