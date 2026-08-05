@@ -1,0 +1,17 @@
+name: Setup pnpm + Node + deps
+description: corepack-pinned pnpm 11.18.0, Node 22 with pnpm cache, frozen-lockfile install
+runs:
+  using: composite
+  steps:
+    - name: Enable corepack / pin pnpm
+      shell: bash
+      run: |
+        corepack enable
+        corepack prepare pnpm@11.18.0 --activate
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: pnpm
+    - name: Install dependencies
+      shell: bash
+      run: pnpm install --frozen-lockfile

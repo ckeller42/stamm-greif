@@ -18,23 +18,14 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       PAYLOAD_SECRET: ci-not-a-real-secret
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable corepack / pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.18.0 --activate
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Start test database
         run: docker compose -f docker-compose.dev.yml up -d db-test
@@ -77,6 +68,7 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PAYLOAD_SECRET: ci-not-a-real-secret
       DATABASE_URI: postgres://archiv:archiv@localhost:5432/archiv
@@ -84,17 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable corepack / pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.18.0 --activate
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Start dev database
         run: docker compose -f docker-compose.dev.yml up -d db
@@ -134,23 +116,14 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       PAYLOAD_SECRET: build-time-placeholder-not-used-at-runtime
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable corepack / pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.18.0 --activate
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Production build (standalone)
         run: pnpm build
