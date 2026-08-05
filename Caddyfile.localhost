@@ -1,0 +1,7 @@
+# Local verification variant of the Caddyfile (Task 14, Step 5). Caddy's automatic HTTPS only
+# kicks in for a public-looking hostname; `:80` here just serves plain HTTP on localhost so the
+# stack can be smoke-tested without a domain or certificates. Used via the compose override:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
+:80 {
+	reverse_proxy app:3000
+}

@@ -1,0 +1,3 @@
+archiv.stamm-greif.de {
+	reverse_proxy app:3000
+}

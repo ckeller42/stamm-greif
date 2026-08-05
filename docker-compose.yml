@@ -1,0 +1,69 @@
+# Production deployment for one VPS: app (Next/Payload) + Postgres + Caddy (TLS termination).
+# See docs/betrieb.md for Erststart, Backup, Restore, Monitoring. Local verification uses
+# Caddyfile.localhost instead of the production Caddyfile (see that doc's "Verify" section).
+services:
+  app:
+    build:
+      context: .
+      target: run
+    restart: unless-stopped
+    environment:
+      DATABASE_URI: postgres://archiv:${DB_PASSWORD}@db:5432/archiv
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+    volumes:
+      # Reality check (Task 14): Photos has no upload.staticDir override, so Payload uses its
+      # default (the collection slug, "photos") resolved relative to process.cwd() — /app in
+      # this image. That's /app/photos, not /app/media as a generic assumption might suggest.
+      - uploads:/app/photos
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # One-off schema migration runner. Not part of `docker compose up` (profile "tools" keeps it
+  # out of the default set). Uses the `build` stage, not `run`, because the standalone runtime
+  # image has no pnpm/CLI/source — only the traced production server bundle. See docs/betrieb.md
+  # "Erststart" and "Schema-Änderungen" for when to run this.
+  migrate:
+    build:
+      context: .
+      target: build
+    profiles: ['tools']
+    environment:
+      DATABASE_URI: postgres://archiv:${DB_PASSWORD}@db:5432/archiv
+      PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+      NODE_ENV: production
+      PAYLOAD_MIGRATING: 'true'
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ['pnpm', 'payload', 'migrate']
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: archiv
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: archiv
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U archiv -d archiv']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - app
+
+volumes:
+  uploads: {}
+  db-data: {}
+  caddy-data: {}

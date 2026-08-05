@@ -1,0 +1,23 @@
+:root {
+  --bg: #f5efe3;          /* altes Papier */
+  --surface: #ede4d3;
+  --ink: #2b2620;
+  --muted: #6f6252;
+  --accent: #7a5230;      /* Leder */
+  --accent-2: #3d5a3c;    /* Wald */
+  --gold: #b98a2e;        /* Greif */
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #201c17; --surface: #2b2620; --ink: #e8e0d0;
+    --muted: #a2937d; --accent: #c08a56; --accent-2: #7fa47e; --gold: #d4a94e;
+  }
+}
+:root[data-theme='dark'] {
+  --bg: #201c17; --surface: #2b2620; --ink: #e8e0d0;
+  --muted: #a2937d; --accent: #c08a56; --accent-2: #7fa47e; --gold: #d4a94e;
+}
+body { background: var(--bg); color: var(--ink); font-family: system-ui, sans-serif; margin: 0; }
+a { color: var(--accent); }
+.card { background: var(--surface); border-radius: var(--radius); }
