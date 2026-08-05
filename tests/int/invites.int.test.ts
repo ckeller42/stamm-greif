@@ -42,6 +42,28 @@ describe('invite accept', () => {
     expect(second.status).toBe(410)
   })
 
+  it('is single-use under concurrent accepts: exactly one wins, losers are rolled back', async () => {
+    const invite = await payload.create({ collection: 'invites', data: { role: 'mitglied' } as any, overrideAccess: true })
+    const stamp = Date.now()
+    const statuses = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        fetch('http://localhost:3000/api/invites/accept', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: invite.token, name: `P${i}`, email: `race${i}-${stamp}@example.com`, password: 'geheim123' }),
+        }).then((r) => r.status),
+      ),
+    )
+    // The atomic single-use claim must let exactly one request through.
+    expect(statuses.filter((s) => s === 200)).toHaveLength(1)
+    expect(statuses.filter((s) => s === 410)).toHaveLength(5)
+    // Losing requests delete the user they optimistically created, so only one persists.
+    const created = await payload.find({
+      collection: 'users', where: { email: { contains: `-${stamp}@example.com` } },
+      overrideAccess: true, pagination: false,
+    })
+    expect(created.docs).toHaveLength(1)
+  })
+
   it('rejects an unknown token with 404', async () => {
     const res = await fetch('http://localhost:3000/api/invites/accept', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
