@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same branch/PR to save minutes.
 concurrency:
   group: ci-${{ github.ref }}
@@ -62,7 +65,10 @@ jobs:
           echo "no drift"
 
       - name: Unit tests
-        run: pnpm test:unit
+        run: |
+          set -o pipefail
+          pnpm test:unit 2>&1 | tee /tmp/unit.out
+          { echo '### Unit test coverage'; echo '```'; grep -A 100 'Coverage report' /tmp/unit.out | head -40 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       # invites.int.test.ts drives the real /api/invites/accept HTTP endpoint, so the app must be
       # running against the same database the test writes to (test DB on :5433). The job ends
@@ -194,5 +200,5 @@ jobs:
 
       - name: actionlint
         run: |
-          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
           ./actionlint -color

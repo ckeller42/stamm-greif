@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 jobs:
   image:
     name: publish image
