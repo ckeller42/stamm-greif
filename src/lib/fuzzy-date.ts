@@ -25,7 +25,9 @@ export function parseFuzzyDate(fd: FuzzyDate): { sortKey: number | null; label: 
       return { sortKey: Number(v) * 10_000, label: v }
     }
     case 'decade': {
-      if (!/^\d{4}$/.test(v)) return { ...UNKNOWN }
+      // A decade must be a 4-digit year ending in 0 (e.g. 1980). Reject values like 1987, which
+      // would otherwise produce a nonsensical "1987er Jahre" label.
+      if (!/^\d{4}$/.test(v) || Number(v) % 10 !== 0) return { ...UNKNOWN }
       return { sortKey: Number(v) * 10_000, label: `${v}er Jahre` }
     }
     default:

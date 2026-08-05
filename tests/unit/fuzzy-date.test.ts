@@ -14,6 +14,10 @@ describe('parseFuzzyDate', () => {
     expect(parseFuzzyDate({ precision: 'decade', value: '1980' }))
       .toEqual({ sortKey: 19800000, label: '1980er Jahre' })
   })
+  it('decade not ending in 0 (e.g. 1987) -> unknown', () => {
+    expect(parseFuzzyDate({ precision: 'decade', value: '1987' }))
+      .toEqual({ sortKey: null, label: 'Datum unbekannt' })
+  })
   it('unknown -> null sortKey', () => {
     expect(parseFuzzyDate({ precision: 'unknown' }))
       .toEqual({ sortKey: null, label: 'Datum unbekannt' })
