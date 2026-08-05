@@ -51,9 +51,9 @@ jobs:
           docker compose -f docker-compose.dev.yml exec -T db-test psql -U archiv -d archiv_test \
             -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null
           pnpm payload migrate
-          before=$(ls src/migrations/*.ts | wc -l)
+          before=$(find src/migrations -maxdepth 1 -name '*.ts' | wc -l)
           pnpm payload migrate:create ci_drift_check --skip-empty
-          after=$(ls src/migrations/*.ts | wc -l)
+          after=$(find src/migrations -maxdepth 1 -name '*.ts' | wc -l)
           if [ "$after" -ne "$before" ]; then
             echo "::error::Schema drift: run pnpm payload migrate:create and commit the result"
             git status --porcelain src/migrations/
@@ -162,7 +162,7 @@ jobs:
 
       - name: Smoke test through Caddy
         run: |
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1/anmelden || true)
             [ "$code" = "200" ] && { echo "smoke OK"; exit 0; }
             sleep 3
@@ -174,3 +174,25 @@ jobs:
       - name: Teardown
         if: always()
         run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+
+  # Advisory checks — deliberately NOT in the required-checks list: an audit false positive
+  # must not freeze merges. Red here means "look", not "stop".
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Dependency audit (prod, high+)
+        continue-on-error: true
+        run: pnpm audit --prod --audit-level high
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
