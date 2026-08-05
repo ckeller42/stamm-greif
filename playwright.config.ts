@@ -36,11 +36,12 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'pnpm dev',
-    // Locally, reuse a dev server you already have running. In CI, always start a fresh one so
-    // a stale server from an earlier step (e.g. the integration job's app on the test DB) can
-    // never be picked up and answer requests against the wrong database.
+    // CI runs the real production artifact (standalone build) to kill dev/prod skew; locally
+    // keep next dev + reuse for fast iteration. reuseExistingServer stays off in CI so a stale
+    // server from another step can never answer against the wrong database.
+    command: process.env.CI ? 'pnpm build && bash scripts/start-standalone.sh' : 'pnpm dev',
     reuseExistingServer: !process.env.CI,
     url: 'http://localhost:3000',
+    timeout: 240_000,
   },
 })

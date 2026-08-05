@@ -6,6 +6,7 @@ services:
     build:
       context: .
       target: run
+    image: ghcr.io/ckeller42/stamm-greif:latest
     restart: unless-stopped
     environment:
       DATABASE_URI: postgres://archiv:${DB_PASSWORD}@db:5432/archiv

@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 # Cancel superseded runs on the same branch/PR to save minutes.
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,23 +21,14 @@ jobs:
   test:
     name: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       PAYLOAD_SECRET: ci-not-a-real-secret
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable corepack / pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.18.0 --activate
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Start test database
         run: docker compose -f docker-compose.dev.yml up -d db-test
@@ -53,8 +47,28 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      - name: Migration drift check
+        env:
+          DATABASE_URI: postgres://archiv:archiv@localhost:5433/archiv_test
+        run: |
+          docker compose -f docker-compose.dev.yml exec -T db-test psql -U archiv -d archiv_test \
+            -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null
+          pnpm payload migrate
+          before=$(find src/migrations -maxdepth 1 -name '*.ts' | wc -l)
+          pnpm payload migrate:create ci_drift_check --skip-empty
+          after=$(find src/migrations -maxdepth 1 -name '*.ts' | wc -l)
+          if [ "$after" -ne "$before" ]; then
+            echo "::error::Schema drift: run pnpm payload migrate:create and commit the result"
+            git status --porcelain src/migrations/
+            exit 1
+          fi
+          echo "no drift"
+
       - name: Unit tests
-        run: pnpm test:unit
+        run: |
+          set -o pipefail
+          pnpm test:unit 2>&1 | tee /tmp/unit.out
+          { echo '### Unit test coverage'; echo '```'; grep -A 100 'Coverage report' /tmp/unit.out | head -40 || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
       # invites.int.test.ts drives the real /api/invites/accept HTTP endpoint, so the app must be
       # running against the same database the test writes to (test DB on :5433). The job ends
@@ -77,6 +91,7 @@ jobs:
   e2e:
     name: e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       PAYLOAD_SECRET: ci-not-a-real-secret
       DATABASE_URI: postgres://archiv:archiv@localhost:5432/archiv
@@ -84,17 +99,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable corepack / pin pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@11.18.0 --activate
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Start dev database
         run: docker compose -f docker-compose.dev.yml up -d db
@@ -107,6 +112,12 @@ jobs:
             [ "$i" = 30 ] && { echo "dev db never came up"; exit 1; }
             sleep 2
           done
+
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
@@ -128,29 +139,66 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # Guards the production Docker build path: next build with output:'standalone'. PAYLOAD_SECRET
-  # is a build-time placeholder only (the real one is injected at container runtime), mirroring
-  # the Dockerfile's own build stage.
-  build:
-    name: build
+  # Builds the production image and boots the full compose stack (app + db + caddy via the
+  # localhost override), then smoke-tests through Caddy. This is the only place CI verifies the
+  # actual deployment artifact: Dockerfile stages, USER node, /app/photos ownership, compose
+  # wiring, migrations-in-stack.
+  docker:
+    name: docker
     runs-on: ubuntu-latest
-    env:
-      PAYLOAD_SECRET: build-time-placeholder-not-used-at-runtime
-      NEXT_TELEMETRY_DISABLED: '1'
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - name: Enable corepack / pin pnpm
+      - name: Create throwaway env
         run: |
-          corepack enable
-          corepack prepare pnpm@11.18.0 --activate
+          {
+            echo "DB_PASSWORD=$(openssl rand -hex 16)"
+            echo "PAYLOAD_SECRET=$(openssl rand -hex 32)"
+          } > .env
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+      - name: Build images
+        run: docker compose build
 
-      - run: pnpm install --frozen-lockfile
+      - name: Boot stack and migrate
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d db
+          docker compose run --rm migrate
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 
-      - name: Production build (standalone)
-        run: pnpm build
+      - name: Smoke test through Caddy
+        run: |
+          for _ in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1/anmelden || true)
+            [ "$code" = "200" ] && { echo "smoke OK"; exit 0; }
+            sleep 3
+          done
+          echo "::error::stack never served /anmelden with 200 (last code: $code)"
+          docker compose logs
+          exit 1
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
+
+  # Advisory checks — deliberately NOT in the required-checks list: an audit false positive
+  # must not freeze merges. Red here means "look", not "stop".
+  hygiene:
+    name: hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+
+      - name: Dependency audit (prod, high+)
+        continue-on-error: true
+        run: pnpm audit --prod --audit-level high
+
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+
+      - name: actionlint
+        run: |
+          bash <(curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
