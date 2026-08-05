@@ -32,6 +32,20 @@ Danach `https://archiv.stamm-greif.de/admin` öffnen — Payload zeigt automatis
 zum Anlegen des ersten Nutzers. **Rolle auf „Admin" stellen** (Standard wäre „Mitglied"). Alle
 weiteren Nutzer kommen über Einladungslinks ins System, nicht über Selbstregistrierung.
 
+### Deployment per fertigem Image (Alternative ohne Server-Build)
+
+Jeder Merge auf `main` veröffentlicht das fertige Produktions-Image als
+`ghcr.io/ckeller42/stamm-greif:latest` (GitHub Container Registry). Statt auf dem Server zu
+bauen, kann man es direkt ziehen — schneller und braucht kaum RAM:
+
+```sh
+docker compose pull app
+docker compose up -d
+```
+
+(Beim allerersten Mal ggf. `docker login ghcr.io` mit einem GitHub-Token, falls das Paket nicht
+öffentlich ist. Migrationen wie gehabt vorher per `docker compose run --rm migrate`.)
+
 ## Datenbankschema / Migrationen
 
 Payload synchronisiert das Schema in der Entwicklung automatisch mit der DB ("Push-Modus"). Im
