@@ -105,6 +105,19 @@ describe('photo visibility', () => {
     expect(await countScopedAs(mitgliedA, photo.id)).toBe(0)
   })
 
+  it('deleting a hidden person recomputes their photos so a co-tagged photo becomes visible again', async () => {
+    const hidden = await payload.create({ collection: 'people', data: { name: 'ZuLoeschen', hidden: true }, overrideAccess: true })
+    const photo = await createPublishedPhoto([hidden.id])
+    // Hidden person → photo invisible to a normal mitglied.
+    expect(await countScopedAs(mitgliedA, photo.id)).toBe(0)
+    await payload.delete({ collection: 'people', id: hidden.id, overrideAccess: true })
+    // The person (and the photo link) are gone; the afterDelete recompute must clear
+    // hasHiddenPerson so the photo — no longer tagging any hidden person — is visible again.
+    const check = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true, depth: 0 })
+    expect(check.hasHiddenPerson).toBe(false)
+    expect(await countScopedAs(mitgliedA, photo.id)).toBe(1)
+  })
+
   it('draft photos are invisible to other mitglieder', async () => {
     const draft = await payload.create({
       collection: 'photos',
