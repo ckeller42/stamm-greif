@@ -133,20 +133,44 @@ jobs:
           path: playwright-report/
           retention-days: 7
 
-  # Guards the production Docker build path: next build with output:'standalone'. PAYLOAD_SECRET
-  # is a build-time placeholder only (the real one is injected at container runtime), mirroring
-  # the Dockerfile's own build stage.
-  build:
-    name: build
+  # Builds the production image and boots the full compose stack (app + db + caddy via the
+  # localhost override), then smoke-tests through Caddy. This is the only place CI verifies the
+  # actual deployment artifact: Dockerfile stages, USER node, /app/photos ownership, compose
+  # wiring, migrations-in-stack.
+  docker:
+    name: docker
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      PAYLOAD_SECRET: build-time-placeholder-not-used-at-runtime
-      NEXT_TELEMETRY_DISABLED: '1'
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ./.github/actions/setup
+      - name: Create throwaway env
+        run: |
+          {
+            echo "DB_PASSWORD=$(openssl rand -hex 16)"
+            echo "PAYLOAD_SECRET=$(openssl rand -hex 32)"
+          } > .env
 
-      - name: Production build (standalone)
-        run: pnpm build
+      - name: Build images
+        run: docker compose build
+
+      - name: Boot stack and migrate
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d db
+          docker compose run --rm migrate
+          docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+
+      - name: Smoke test through Caddy
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -m 5 http://127.0.0.1/anmelden || true)
+            [ "$code" = "200" ] && { echo "smoke OK"; exit 0; }
+            sleep 3
+          done
+          echo "::error::stack never served /anmelden with 200 (last code: $code)"
+          docker compose logs
+          exit 1
+
+      - name: Teardown
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.local.yml down -v
