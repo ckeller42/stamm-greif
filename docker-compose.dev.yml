@@ -5,7 +5,9 @@ services:
       POSTGRES_USER: archiv
       POSTGRES_PASSWORD: archiv
       POSTGRES_DB: archiv
-    ports: ["5432:5432"]
+    # Bind to loopback only: the dev DB uses committed throwaway credentials, so it must not be
+    # reachable from other hosts on the network.
+    ports: ["127.0.0.1:5432:5432"]
     volumes: [dev-db:/var/lib/postgresql/data]
   db-test:
     image: postgres:17-alpine
@@ -13,6 +15,6 @@ services:
       POSTGRES_USER: archiv
       POSTGRES_PASSWORD: archiv
       POSTGRES_DB: archiv_test
-    ports: ["5433:5432"]
+    ports: ["127.0.0.1:5433:5432"]
 volumes:
   dev-db:

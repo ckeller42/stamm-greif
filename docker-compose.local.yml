@@ -8,5 +8,10 @@
 # deploy steps — only for local smoke-testing this file set.
 services:
   caddy:
+    # Caddyfile.localhost serves plain HTTP, so bind only loopback and drop the inherited 443
+    # mapping — otherwise cleartext login/session traffic would be reachable from the network.
+    # `!override` replaces docker-compose.yml's ports list instead of appending to it (needs
+    # Compose v2.24+).
+    ports: !override ["127.0.0.1:80:80"]
     volumes:
       - ./Caddyfile.localhost:/etc/caddy/Caddyfile:ro

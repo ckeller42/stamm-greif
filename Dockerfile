@@ -35,8 +35,13 @@ ENV NODE_ENV=production
 # refuse connections from other containers).
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
-COPY --from=build /app/.next/standalone ./
-COPY --from=build /app/.next/static ./.next/static
-COPY --from=build /app/public ./public
+# Run as the built-in unprivileged `node` user, not root. Copy app files owned by node, and
+# create /app/photos owned by node so the uploads volume (mounted there by docker-compose.yml)
+# is writable — a fresh named volume inherits the mount point's ownership from the image.
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
+RUN mkdir -p /app/photos && chown node:node /app/photos
+USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

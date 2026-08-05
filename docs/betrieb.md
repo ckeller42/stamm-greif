@@ -19,7 +19,7 @@ Repo-Verzeichnis auf dem VPS (z. B. `/opt/archiv`).
 cd /opt/archiv
 cp .env.example .env
 # DB_PASSWORD und PAYLOAD_SECRET setzen, z. B. mit:
-#   openssl rand -base64 24   (für DB_PASSWORD)
+#   openssl rand -hex 32      (für DB_PASSWORD — hex, damit keine + / = die DATABASE_URI zerlegen)
 #   openssl rand -base64 32   (für PAYLOAD_SECRET)
 $EDITOR .env
 

@@ -17,12 +17,20 @@ STAMP=$(date +%F)
 BACKUP_DIR=/var/backups/archiv
 mkdir -p "$BACKUP_DIR"
 
-docker compose exec -T db pg_dump -U archiv archiv | gzip > "$BACKUP_DIR/db-$STAMP.sql.gz"
+# Dump to a temp file and rename only on success, so a failed pg_dump/gzip (set -o pipefail
+# stops the script) never leaves a partial db-<date>.sql.gz that the rsync below would ship as a
+# real backup. The trap removes the temp on any early exit.
+DUMP="$BACKUP_DIR/db-$STAMP.sql.gz"
+TMP="$DUMP.tmp"
+trap 'rm -f "$TMP"' EXIT
+docker compose exec -T db pg_dump -U archiv archiv | gzip > "$TMP"
+mv "$TMP" "$DUMP"
 
 # uploads: rsync the docker volume to the offsite target (Hetzner Storage Box via ssh)
 rsync -az "/var/lib/docker/volumes/$(basename "$PWD")_uploads/_data/" \
   "${OFFSITE_TARGET}backups/archiv/uploads/"
-rsync -az "$BACKUP_DIR/" "${OFFSITE_TARGET}backups/archiv/db/"
+# --exclude keeps any leftover *.tmp (from a concurrent/failed run) out of the offsite copy.
+rsync -az --exclude='*.tmp' "$BACKUP_DIR/" "${OFFSITE_TARGET}backups/archiv/db/"
 
 # keep 30 days locally
 find "$BACKUP_DIR" -name 'db-*.sql.gz' -mtime +30 -delete
