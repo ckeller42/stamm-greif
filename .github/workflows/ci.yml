@@ -107,6 +107,12 @@ jobs:
             sleep 2
           done
 
+      - name: Cache Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
       - name: Install Playwright browser
         run: pnpm exec playwright install --with-deps chromium
 
