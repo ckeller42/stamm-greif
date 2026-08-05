@@ -44,6 +44,23 @@ jobs:
       - name: Typecheck
         run: pnpm exec tsc --noEmit
 
+      - name: Migration drift check
+        env:
+          DATABASE_URI: postgres://archiv:archiv@localhost:5433/archiv_test
+        run: |
+          docker compose -f docker-compose.dev.yml exec -T db-test psql -U archiv -d archiv_test \
+            -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;" >/dev/null
+          pnpm payload migrate
+          before=$(ls src/migrations/*.ts | wc -l)
+          pnpm payload migrate:create ci_drift_check --skip-empty
+          after=$(ls src/migrations/*.ts | wc -l)
+          if [ "$after" -ne "$before" ]; then
+            echo "::error::Schema drift: run pnpm payload migrate:create and commit the result"
+            git status --porcelain src/migrations/
+            exit 1
+          fi
+          echo "no drift"
+
       - name: Unit tests
         run: pnpm test:unit
 

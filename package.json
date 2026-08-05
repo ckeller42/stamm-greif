@@ -14,7 +14,7 @@
     "payload": "cross-env NODE_OPTIONS=--no-deprecation payload",
     "start": "cross-env NODE_OPTIONS=--no-deprecation next start",
     "test": "pnpm run test:unit && pnpm run test:int && pnpm run test:e2e",
-    "test:unit": "vitest run tests/unit",
+    "test:unit": "vitest run tests/unit --coverage.enabled --coverage.include='src/lib/**'",
     "test:int": "cross-env DATABASE_URI=postgres://archiv:archiv@localhost:5433/archiv_test vitest run tests/int --no-file-parallelism",
     "test:e2e": "playwright test"
   },
@@ -41,6 +41,7 @@
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "4.5.2",
+    "@vitest/coverage-v8": "^4.0.18",
     "eslint": "^9.16.0",
     "eslint-config-next": "16.2.6",
     "jsdom": "28.0.0",
