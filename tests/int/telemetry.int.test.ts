@@ -32,17 +32,33 @@ describe('error responses carry a Fehler-ID', () => {
   it('rejected upload (disallowed mime) returns message with Fehler-ID', async () => {
     const cookie = await loginCookie()
     const body = new FormData()
-    // a fake HEIC: content is irrelevant, the mime check fires first — image/heic is not in
-    // the Photos mimeTypes allowlist (see Photos.ts), so this is rejected before any decode
-    // is attempted. This doubles as the regression test for the HEIC allowlist fix.
-    body.append('file', new Blob([new Uint8Array([0, 1, 2, 3])], { type: 'image/heic' }), 'foto.heic')
+    // A minimal ISOBMFF ftyp box with a 'heic' major brand — genuinely content-sniffed as
+    // image/heic by Payload's file-type detection (checkFileRestrictions), not just declared
+    // via the Blob's content-type or filename extension. image/heic is not in the Photos
+    // mimeTypes allowlist (see Photos.ts), so detection succeeds but the allowlist check
+    // rejects it. This is the regression test for the HEIC allowlist fix: reverting the
+    // allowlist change would make this request succeed instead of failing here.
+    const ftypHeic = new Uint8Array([
+      0x00, 0x00, 0x00, 0x18, // box size 24
+      0x66, 0x74, 0x79, 0x70, // 'ftyp'
+      0x68, 0x65, 0x69, 0x63, // major brand 'heic'
+      0x00, 0x00, 0x00, 0x00, // minor version
+      0x68, 0x65, 0x69, 0x63, // compatible brand 'heic'
+      0x6d, 0x69, 0x66, 0x31, // compatible brand 'mif1'
+    ])
+    body.append('file', new Blob([ftypHeic], { type: 'image/heic' }), 'foto.heic')
     body.append('_payload', JSON.stringify({ datePrecision: 'unknown', _status: 'draft' }))
     const res = await fetch('http://localhost:3000/api/photos', {
       method: 'POST', headers: { cookie }, body,
     })
     expect(res.ok).toBe(false)
-    const json = (await res.json()) as { errors?: { message: string }[] }
+    const json = (await res.json()) as {
+      errors?: { message: string; data?: { errors?: { message: string }[] } }[]
+    }
     expect(json.errors?.[0]?.message).toMatch(/Fehler-ID: [0-9a-f]{6}/)
+    // Confirms the rejection is the mime-allowlist check (naming image/heic), not a
+    // decode/extension-fallback error.
+    expect(json.errors?.[0]?.data?.errors?.[0]?.message).toBe('Invalid MIME type: image/heic.')
   })
 })
 
