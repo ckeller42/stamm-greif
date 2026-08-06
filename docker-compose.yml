@@ -19,6 +19,9 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
 
   # One-off schema migration runner. Not part of `docker compose up` (profile "tools" keeps it
   # out of the default set). Uses the `build` stage, not `run`, because the standalone runtime
@@ -53,6 +56,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
 
   caddy:
     image: caddy:2-alpine
@@ -63,6 +69,9 @@ services:
       - caddy-data:/data
     depends_on:
       - app
+    logging:
+      driver: json-file
+      options: { max-size: '10m', max-file: '5' }
 
 volumes:
   uploads: {}
