@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { newErrorId, recordError, errorsLastHour, _resetRing } from '@/lib/telemetry'
+import { newErrorId, recordError, errorsLastHour, sanitizeUrl, _resetRing } from '@/lib/telemetry'
 
 afterEach(() => { _resetRing(); vi.restoreAllMocks(); vi.useRealTimers() })
 
@@ -8,6 +8,24 @@ describe('newErrorId', () => {
     const ids = new Set(Array.from({ length: 50 }, () => newErrorId()))
     for (const id of ids) expect(id).toMatch(/^[0-9a-f]{6}$/)
     expect(ids.size).toBeGreaterThan(45)
+  })
+})
+
+describe('sanitizeUrl', () => {
+  it('redacts a bare invite path', () => {
+    expect(sanitizeUrl('/einladung/abc-123')).toBe('/einladung/[token]')
+  })
+
+  it('redacts a full URL and preserves the query string', () => {
+    expect(sanitizeUrl('http://x/einladung/uuid?x=1')).toBe('http://x/einladung/[token]?x=1')
+  })
+
+  it('leaves unrelated paths unchanged', () => {
+    expect(sanitizeUrl('/anmelden')).toBe('/anmelden')
+  })
+
+  it('passes through undefined', () => {
+    expect(sanitizeUrl(undefined)).toBeUndefined()
   })
 })
 

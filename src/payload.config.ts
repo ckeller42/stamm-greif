@@ -18,7 +18,7 @@ import { Photos } from './collections/Photos'
 import { Places } from './collections/Places'
 import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
-import { newErrorId, recordError } from '@/lib/telemetry'
+import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -63,8 +63,8 @@ export default buildConfig({
           errorId,
           msg: error.message,
           stack: error.stack,
-          path: req?.url ?? undefined,
-          user: req?.user?.email ?? undefined,
+          path: sanitizeUrl(req?.url ?? undefined),
+          user: req?.user?.id ?? undefined, // opaque ID, not email — keeps PII out of logs
           collection: collection?.slug,
           source: 'afterError',
         })

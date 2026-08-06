@@ -27,7 +27,9 @@ case "$cmd" in
     ;;
   tail)
     # Live firehose: both our telemetry lines and Payload's own error-level lines, unfiltered.
-    docker compose logs app --no-log-prefix -f 2>/dev/null | grep --line-buffered -E '"level":"error"|"level":50'
+    # No --line-buffered: BusyBox grep (Alpine) lacks the flag, and terminal stdout is
+    # line-buffered by default anyway, so output still streams line-by-line.
+    docker compose logs app --no-log-prefix -f 2>/dev/null | grep -E '"level":"error"|"level":50'
     ;;
   *)
     # treat as Fehler-ID

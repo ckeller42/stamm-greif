@@ -18,4 +18,10 @@ describe('formatServerError', () => {
   it('error entry without message -> null', () => {
     expect(formatServerError({ errors: [{}] })).toBeNull()
   })
+  it('null entry -> null', () => {
+    expect(formatServerError({ errors: [null] })).toBeNull()
+  })
+  it('non-object entry -> null', () => {
+    expect(formatServerError({ errors: ['x'] })).toBeNull()
+  })
 })

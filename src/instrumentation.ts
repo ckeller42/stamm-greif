@@ -1,4 +1,4 @@
-import { newErrorId, recordError } from '@/lib/telemetry'
+import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 
 export function register(): void {
   // nothing to set up — onRequestError below is the hook that matters
@@ -17,7 +17,7 @@ export function onRequestError(
     errorId: newErrorId(),
     msg: e.message,
     stack: e.stack,
-    path: request.path,
+    path: sanitizeUrl(request.path),
     method: request.method,
     routeType: context.routeType,
     routePath: context.routePath,

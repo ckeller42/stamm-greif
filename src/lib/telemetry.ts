@@ -20,6 +20,13 @@ export function newErrorId(): string {
   return crypto.randomBytes(3).toString('hex')
 }
 
+// Redacts invite tokens from logged URLs/paths so a leaked log line can't be used to accept
+// someone else's invite. `/einladung/<token>` → `/einladung/[token]`; query/hash untouched.
+export function sanitizeUrl(url: string | undefined): string | undefined {
+  if (url === undefined) return undefined
+  return url.replace(/(\/einladung\/)[^/?#]+/, '$1[token]')
+}
+
 export function recordError(entry: { errorId: string; msg: string; [k: string]: unknown }): void {
   try {
     const now = Date.now()

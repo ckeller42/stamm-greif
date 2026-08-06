@@ -6,6 +6,11 @@
 	reverse_proxy app:3000
 	log {
 		output stdout
-		format json
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp (/einladung/)[^/?#]+ ${1}[token]
+			}
+		}
 	}
 }

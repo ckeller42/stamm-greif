@@ -108,10 +108,11 @@ Schema inklusive der Payload-internen `payload_migrations`-Tabelle.
 
 ## Fehlersuche
 
-Wenn im Frontend ein Fehler auftritt, zeigt Payload in der Fehlermeldung eine kurze
-**Fehler-ID** an (z. B. „... (Fehler-ID: abc123)"). Diese ID steht auch im strukturierten
-Log der `app` — damit lässt sich der genaue Vorfall wiederfinden, ohne im ganzen Log zu
-suchen.
+Wenn ein API-Fehler auftritt (eine fehlgeschlagene Server-Antwort), zeigt Payload in der
+Fehlermeldung eine kurze **Fehler-ID** an (z. B. „... (Fehler-ID: abc123)"). Diese ID steht
+auch im strukturierten Log der `app` — damit lässt sich der genaue Vorfall wiederfinden, ohne
+im ganzen Log zu suchen. Client-seitige oder Netzwerkfehler (z. B. keine Verbindung zum
+Server) tragen keine Fehler-ID — dafür gibt es keinen Log-Eintrag zum Nachschlagen.
 
 ```sh
 scripts/errors.sh abc123
@@ -132,9 +133,9 @@ Log-Aufbewahrung: Die `app`-, `db`- und `caddy`-Container laufen mit dem Docker-
 Treiber und Rotation (`docker-compose.yml`, je 5 × 10 MB) — die Historie ist also begrenzt,
 übersteht aber Neustarts der Container.
 
-Die Logs enthalten personenbezogene Daten (E-Mail-Adressen von Mitgliedern, IP-Adressen und
-URLs inkl. Einladungs-Tokens) — deshalb bleiben sie auf dem Server und unterliegen der
-Log-Rotation.
+Die Logs enthalten personenbezogene Daten (Nutzer-IDs — keine E-Mail-Adressen mehr — sowie
+IP-Adressen) — deshalb bleiben sie auf dem Server und unterliegen der Log-Rotation.
+Einladungs-Tokens werden in den Logs geschwärzt (`[token]`).
 
 Zusätzlich liefert `https://archiv.stamm-greif.de/api/health` einen schnellen Gesamtstatus:
 HTTP 200 (`status: "ok"`) wenn die App inklusive DB-Verbindung erreichbar ist, HTTP 503

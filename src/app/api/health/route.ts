@@ -8,15 +8,22 @@ export const dynamic = 'force-dynamic'
 
 export async function GET(): Promise<Response> {
   let db = false
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    const payload = await getPayload({ config })
     await Promise.race([
-      payload.count({ collection: 'users', overrideAccess: true }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('db timeout')), 2000)),
+      (async () => {
+        const payload = await getPayload({ config })
+        await payload.count({ collection: 'users', overrideAccess: true })
+      })(),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('db timeout')), 2000)
+      }),
     ])
     db = true
   } catch {
     db = false
+  } finally {
+    if (timer) clearTimeout(timer)
   }
   return Response.json(
     { status: db ? 'ok' : 'degraded', db, errorsLastHour: errorsLastHour() },
