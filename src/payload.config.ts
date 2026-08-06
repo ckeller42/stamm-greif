@@ -18,6 +18,7 @@ import { Photos } from './collections/Photos'
 import { Places } from './collections/Places'
 import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
+import { newErrorId, recordError } from '@/lib/telemetry'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -54,4 +55,34 @@ export default buildConfig({
   sharp,
   upload: { limits: { fileSize: 100 * 1024 * 1024 } }, // 100 MB (global constraint)
   plugins: [],
+  hooks: {
+    afterError: [
+      ({ error, req, result, collection }) => {
+        const errorId = newErrorId()
+        recordError({
+          errorId,
+          msg: error.message,
+          stack: error.stack,
+          path: req?.url ?? undefined,
+          user: req?.user?.email ?? undefined,
+          collection: collection?.slug,
+          source: 'afterError',
+        })
+        // Attach the ID to the REST error body so forms can show it („Fehler-ID: abc123").
+        // AfterErrorResult supports { response } overrides (verified against 3.87 types).
+        if (result && Array.isArray((result as { errors?: { message: string }[] }).errors)) {
+          const r = result as { errors: { message: string }[] }
+          return {
+            response: {
+              ...r,
+              errors: r.errors.map((e, i) =>
+                i === 0 ? { ...e, message: `${e.message} (Fehler-ID: ${errorId})` } : e,
+              ),
+            },
+          }
+        }
+        return undefined
+      },
+    ],
+  },
 })
