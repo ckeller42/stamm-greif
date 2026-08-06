@@ -42,7 +42,11 @@ export const Photos: CollectionConfig = {
   labels: { singular: 'Foto', plural: 'Fotos' },
   admin: { group: 'Archiv', defaultColumns: ['filename', 'caption', '_status'] },
   upload: {
-    mimeTypes: ['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'image/tiff', 'image/webp'],
+    // image/heic|heif deliberately absent: the bundled sharp/libvips cannot decode HEIC
+    // (patent-encumbered codec, "Support for this compression format has not been built in").
+    // iPhones convert HEIC→JPEG client-side when the file input's accept lists concrete types
+    // (see UploadForm). Re-adding HEIC requires a libheif-enabled sharp build — tracked follow-up.
+    mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp'],
     imageSizes: [
       { name: 'thumbnail', width: 400 },
       { name: 'web', width: 1600 },

@@ -32,8 +32,9 @@ describe('error responses carry a Fehler-ID', () => {
   it('rejected upload (disallowed mime) returns message with Fehler-ID', async () => {
     const cookie = await loginCookie()
     const body = new FormData()
-    // a fake HEIC: content is irrelevant, the mime check fires first — this doubles as the
-    // regression test for the HEIC allowlist fix (Task 5 removes image/heic from mimeTypes)
+    // a fake HEIC: content is irrelevant, the mime check fires first — image/heic is not in
+    // the Photos mimeTypes allowlist (see Photos.ts), so this is rejected before any decode
+    // is attempted. This doubles as the regression test for the HEIC allowlist fix.
     body.append('file', new Blob([new Uint8Array([0, 1, 2, 3])], { type: 'image/heic' }), 'foto.heic')
     body.append('_payload', JSON.stringify({ datePrecision: 'unknown', _status: 'draft' }))
     const res = await fetch('http://localhost:3000/api/photos', {
