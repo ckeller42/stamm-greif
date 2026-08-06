@@ -40,6 +40,9 @@ export default buildConfig({
   collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance, Photos],
   editor: lexicalEditor(),
   secret,
+  // Structured JSON logs to stdout (pino). Without this Payload is near-silent in the
+  // standalone container — the motivating incident produced zero log lines.
+  logger: { options: { level: 'info' }, destination: process.stdout },
   typescript: {
     outputFile: path.resolve(dirname, 'payload-types.ts'),
   },
