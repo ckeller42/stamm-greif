@@ -44,3 +44,14 @@ describe('error responses carry a Fehler-ID', () => {
     expect(json.errors?.[0]?.message).toMatch(/Fehler-ID: [0-9a-f]{6}/)
   })
 })
+
+describe('health endpoint', () => {
+  it('answers 200 ok with error count', async () => {
+    const res = await fetch('http://localhost:3000/api/health')
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { status: string; db: boolean; errorsLastHour: number }
+    expect(json.status).toBe('ok')
+    expect(json.db).toBe(true)
+    expect(typeof json.errorsLastHour).toBe('number')
+  })
+})
