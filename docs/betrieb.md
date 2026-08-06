@@ -132,6 +132,10 @@ Log-Aufbewahrung: Die `app`-, `db`- und `caddy`-Container laufen mit dem Docker-
 Treiber und Rotation (`docker-compose.yml`, je 5 × 10 MB) — die Historie ist also begrenzt,
 übersteht aber Neustarts der Container.
 
+Die Logs enthalten personenbezogene Daten (E-Mail-Adressen von Mitgliedern, IP-Adressen und
+URLs inkl. Einladungs-Tokens) — deshalb bleiben sie auf dem Server und unterliegen der
+Log-Rotation.
+
 Zusätzlich liefert `https://archiv.stamm-greif.de/api/health` einen schnellen Gesamtstatus:
 HTTP 200 (`status: "ok"`) wenn die App inklusive DB-Verbindung erreichbar ist, HTTP 503
 (`status: "degraded"`) wenn die Datenbank nicht antwortet. Die Antwort enthält außerdem

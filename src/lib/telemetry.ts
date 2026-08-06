@@ -5,7 +5,16 @@ import crypto from 'crypto'
 // errorsLastHour — process-local by design (resets on restart; history lives in the logs).
 const RING_MAX = 200
 const HOUR_MS = 60 * 60 * 1000
-let ring: { time: number }[] = []
+
+// The instrumentation entry gets its own bundled copy of this module in the standalone build,
+// so module-level state would split the ring between funnels. globalThis makes it one ring
+// per process regardless of how many chunks carry this module.
+const RING_KEY = Symbol.for('stamm-greif.telemetry.ring')
+type Ring = { time: number }[]
+const g = globalThis as { [k: symbol]: Ring | undefined }
+function getRing(): Ring {
+  return (g[RING_KEY] ??= [])
+}
 
 export function newErrorId(): string {
   return crypto.randomBytes(3).toString('hex')
@@ -14,7 +23,7 @@ export function newErrorId(): string {
 export function recordError(entry: { errorId: string; msg: string; [k: string]: unknown }): void {
   try {
     const now = Date.now()
-    ring = ring.filter((e) => now - e.time < HOUR_MS)
+    const ring = (g[RING_KEY] = getRing().filter((e) => now - e.time < HOUR_MS))
     if (ring.length >= RING_MAX) ring.shift()
     ring.push({ time: now })
     let line: string
@@ -32,11 +41,11 @@ export function recordError(entry: { errorId: string; msg: string; [k: string]: 
 
 export function errorsLastHour(): number {
   const now = Date.now()
-  ring = ring.filter((e) => now - e.time < HOUR_MS)
+  const ring = (g[RING_KEY] = getRing().filter((e) => now - e.time < HOUR_MS))
   return ring.length
 }
 
 /** Test hook only. */
 export function _resetRing(): void {
-  ring = []
+  g[RING_KEY] = []
 }

@@ -11,12 +11,22 @@ cmd="${1:-recent}"
 case "$cmd" in
   recent)
     hours="${2:-24}"
-    docker compose logs app --no-log-prefix --since "${hours}h" 2>/dev/null \
-      | grep -E '"level":"error"|"level":50' \
-      | jq -r '[.time, .errorId // "-", .msg, (.path // .url // "-")] | @tsv' 2>/dev/null \
-      || echo "keine Fehler in den letzten ${hours}h"
+    # Curated view: only our own telemetry lines (one per error, has errorId). Payload's pino
+    # logger ("level":"error"/"level":50) emits its own line for the same error, so matching
+    # both level patterns here would double-report every incident.
+    if ! logs="$(docker compose logs app --no-log-prefix --since "${hours}h" 2>&1)"; then
+      echo "docker compose logs fehlgeschlagen" >&2
+      exit 1
+    fi
+    matches="$(grep -F '"errorId":"' <<< "$logs" || true)"
+    if [ -z "$matches" ]; then
+      echo "keine Fehler in den letzten ${hours}h"
+    else
+      jq -r '[.time, .errorId // "-", .msg, (.path // .url // "-")] | @tsv' <<< "$matches"
+    fi
     ;;
   tail)
+    # Live firehose: both our telemetry lines and Payload's own error-level lines, unfiltered.
     docker compose logs app --no-log-prefix -f 2>/dev/null | grep --line-buffered -E '"level":"error"|"level":50'
     ;;
   *)
