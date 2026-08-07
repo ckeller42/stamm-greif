@@ -47,9 +47,16 @@ const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation
   if (!file || !looksLikeHeic(file.data)) return
   let jpegBuffer: Buffer
   try {
-    // rotate() bakes in the EXIF orientation before the re-encode strips metadata (sharp's
-    // default JPEG output drops EXIF, so skipping this would silently un-rotate sideways
-    // photos) — the same reason Payload's own pipeline always calls rotate() too.
+    // rotate() bakes in orientation before the re-encode strips metadata — kept for the same
+    // reason Payload's own pipeline always calls it too, and it's a correct no-op here rather
+    // than dead weight. But note (verified via direct testing, tests/int/heic.int.test.ts has
+    // the full writeup): for HEIC/HEIF specifically, this call doesn't actually do anything.
+    // libvips' HEIF loader applies both forms of HEIC orientation it recognizes — the `irot`
+    // transformative property (what real photos use) and, empirically, embedded EXIF
+    // Orientation tags too when present — unconditionally at *decode* time, before sharp's
+    // JS-level rotate() logic (designed for formats like JPEG/TIFF that defer orientation to
+    // the caller) ever gets a chance to act. Confirmed with three independent test fixtures
+    // that calling/not-calling rotate() produces byte-identical dimensions for every one.
     jpegBuffer = await sharp(file.data).rotate().jpeg({ quality: 90 }).toBuffer()
   } catch (err) {
     // A file that structurally looks like a HEIC container (looksLikeHeic passed) but is

@@ -126,20 +126,36 @@ describe('HEIC upload', () => {
   it.skipIf(!heicCapable)(
     'orientation: a non-square HEIC keeps its stored dimensions in proportion (no missed/double rotate)',
     async () => {
-      // dia.jpg is exactly square (100x100), so it can't catch a rotate() bug on its own —
-      // tests/fixtures/dia-portrait.heic is a genuinely non-square 100x150 portrait, built by
-      // physically rotating a 150x100 landscape intermediate 90 degrees (pixel data, not just
-      // an EXIF orientation tag) before encoding to HEIC. If convertHeicToJpeg's rotate() were
-      // missing, or if it ran twice (once in the hook, once more somewhere downstream), the
-      // stored width/height would come out square-ish, swapped, or otherwise not 100x150.
+      // dia.jpg is exactly square (100x100), so it can't catch a width/height-swap regression
+      // on its own — tests/fixtures/dia-portrait.heic is a genuinely non-square 100x150
+      // portrait, built by physically rotating a 150x100 landscape intermediate 90 degrees
+      // (pixel data, not just an EXIF orientation tag) before encoding to HEIC. This guards the
+      // general width/height-through-the-pipeline path (decode -> convert -> store), the same
+      // way it would catch e.g. width/height getting swapped or truncated anywhere in
+      // convertHeicToJpeg or Payload's own dimension handling.
       //
-      // Residual risk not covered by this fixture: real iPhone HEIC photos more commonly store
-      // the sensor's native (often landscape) pixel grid together with an `irot` transformative
-      // property / EXIF orientation tag telling the renderer to rotate on *display*, rather
-      // than storing already-rotated pixels the way this fixture does (sips physically rotates
-      // for JPEG). Both should be handled correctly by sharp's rotate() (it reads EXIF
-      // orientation from either source), but this fixture only exercises the pixel-rotated
-      // case, not the irot-property case.
+      // What this test does NOT prove, despite an earlier version of this comment claiming it
+      // did: that convertHeicToJpeg's `.rotate()` call specifically matters for HEIC. Verified
+      // directly (CodeRabbit review on PR #15 questioned this, correctly) that it doesn't, for
+      // any HEIC orientation encoding constructible with the tools available: this fixture's
+      // pixels are already physically rotated with no orientation metadata at all, so
+      // `.rotate()` has nothing to act on here. Tried two more fixtures specifically to find
+      // one where `.rotate()`'s presence vs. absence changes the outcome: (1) a landscape HEIC
+      // with an EXIF Orientation=6 tag written via `exiftool` — libvips' HEIF loader doesn't
+      // read it at all (`sharp(...).metadata().orientation` comes back `undefined`, dimensions
+      // stay unrotated with or without `.rotate()`); (2) the same HEIC with its `irot` (Image
+      // Rotation) box — the HEIF-native transform property `sips` already writes, defaulted to
+      // 0° — binary-patched to 90°: libvips' HEIF loader auto-applies `irot` unconditionally at
+      // *decode* time, before sharp's JS-level `.rotate()` ever runs, so `sharp(buf).metadata()`
+      // already reports the rotated 100x150 with no `.rotate()` call involved, and calling
+      // `.rotate()` afterward is provably a no-op (identical output either way, confirmed via
+      // `resolveWithObject` byte-identical dimensions). In short: for the HEIC/HEIF codepath
+      // specifically, decode-time orientation is libvips' job, not sharp's `.rotate()`'s.
+      // `.rotate()` stays in convertHeicToJpeg regardless — it's a correct, harmless no-op for
+      // HEIC here, and the function's own comment no longer claims otherwise — but no fixture
+      // can turn its removal into a test failure through this codepath, so this test is kept
+      // for its actual value (a real width/height/proportion regression net) and no longer
+      // described as an orientation/rotate() regression test.
       const res = await uploadFixture('dia-portrait.heic', 'portrait.heic')
       const json = (await res.json()) as {
         doc?: { id: number; width?: number; height?: number }
