@@ -106,11 +106,48 @@ docker compose up -d --build   # App + Caddy starten
 Migrationen müssen hier **nicht** erneut laufen — der Dump enthält bereits das komplette
 Schema inklusive der Payload-internen `payload_migrations`-Tabelle.
 
+## Fehlersuche
+
+Wenn ein API-Fehler auftritt (eine fehlgeschlagene Server-Antwort), zeigt Payload in der
+Fehlermeldung eine kurze **Fehler-ID** an (z. B. „... (Fehler-ID: abc123)"). Diese ID steht
+auch im strukturierten Log der `app` — damit lässt sich der genaue Vorfall wiederfinden, ohne
+im ganzen Log zu suchen. Client-seitige oder Netzwerkfehler (z. B. keine Verbindung zum
+Server) tragen keine Fehler-ID — dafür gibt es keinen Log-Eintrag zum Nachschlagen.
+
+```sh
+scripts/errors.sh abc123
+```
+
+gibt alle Log-Zeilen mit dieser Fehler-ID aus (als JSON, via `jq` formatiert). Weitere
+Aufrufe:
+
+```sh
+scripts/errors.sh recent [stunden]   # Fehler der letzten N Stunden (Default: 24)
+scripts/errors.sh tail               # Fehler live mitverfolgen
+```
+
+Das Skript braucht `jq` (`apt install jq` bzw. `apk add jq`) sowie einen Log-Zugriff über
+`docker compose logs` — beides ist auf dem VPS vorausgesetzt.
+
+Log-Aufbewahrung: Die `app`-, `db`- und `caddy`-Container laufen mit dem Docker-`json-file`-
+Treiber und Rotation (`docker-compose.yml`, je 5 × 10 MB) — die Historie ist also begrenzt,
+übersteht aber Neustarts der Container.
+
+Die Logs enthalten personenbezogene Daten (Nutzer-IDs — keine E-Mail-Adressen mehr — sowie
+IP-Adressen) — deshalb bleiben sie auf dem Server und unterliegen der Log-Rotation.
+Einladungs-Tokens werden in den Logs geschwärzt (`[token]`).
+
+Zusätzlich liefert `https://archiv.stamm-greif.de/api/health` einen schnellen Gesamtstatus:
+HTTP 200 (`status: "ok"`) wenn die App inklusive DB-Verbindung erreichbar ist, HTTP 503
+(`status: "degraded"`) wenn die Datenbank nicht antwortet. Die Antwort enthält außerdem
+`errorsLastHour` (Anzahl Fehler der letzten Stunde) als groben Trend-Indikator.
+
 ## Monitoring
 
-- **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/anmelden` (HTTP 200
-  erwartet), z. B. mit [Uptime Kuma](https://github.com/louislam/uptime-kuma) (selbst gehostet)
-  oder [healthchecks.io](https://healthchecks.io) (kostenlos für wenige Checks), Intervall
+- **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200
+  erwartet, HTTP 503 bei DB-Ausfall — siehe „Fehlersuche" oben), z. B. mit
+  [Uptime Kuma](https://github.com/louislam/uptime-kuma) (selbst gehostet) oder
+  [healthchecks.io](https://healthchecks.io) (kostenlos für wenige Checks), Intervall
   5–15 Minuten, Alarm per E-Mail/Push bei Ausfall.
 - **Plattenplatz:** täglicher Cronjob mit `df`-Warnung, z. B.:
 

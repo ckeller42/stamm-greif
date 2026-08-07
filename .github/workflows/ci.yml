@@ -160,6 +160,9 @@ jobs:
       - name: Build images
         run: docker compose build
 
+      - name: Verify instrumentation is shipped
+        run: docker compose run --rm --no-deps --entrypoint sh app -c 'test -f /app/.next/server/instrumentation.js' && echo "instrumentation shipped"
+
       - name: Boot stack and migrate
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml up -d db

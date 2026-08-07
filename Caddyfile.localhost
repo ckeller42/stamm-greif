@@ -4,4 +4,13 @@
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 :80 {
 	reverse_proxy app:3000
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp (/einladung/)[^/?#]+ ${1}[token]
+			}
+		}
+	}
 }
