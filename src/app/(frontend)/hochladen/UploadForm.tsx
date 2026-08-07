@@ -65,7 +65,7 @@ export function UploadForm() {
   const hasErrors = files.some((f) => f.status === 'fehler')
   return (
     <form onSubmit={submit} style={{ display: 'grid', gap: '0.75rem', maxWidth: 480 }}>
-      <input type="file" accept="image/jpeg,image/png,image/tiff,image/webp" multiple required disabled={uploading}
+      <input type="file" accept="image/jpeg,image/png,image/tiff,image/webp,image/heic,image/heif" multiple required disabled={uploading}
         onChange={(e) => {
           if (uploadingRef.current) return
           setDone(false)

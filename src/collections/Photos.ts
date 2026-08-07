@@ -1,6 +1,37 @@
-import type { Access, CollectionConfig, FieldAccess, Where } from 'payload'
+import type { Access, CollectionBeforeOperationHook, CollectionConfig, FieldAccess, Where } from 'payload'
+import fs from 'node:fs/promises'
+import sharp from 'sharp'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
+
+// Alpine's libheif (see Dockerfile) can *decode* HEIC/HEIF but has no HEVC encoder, so it can
+// only ever write other formats, never HEIC itself — "heifsave: Unsupported compression" is
+// libvips' error for exactly that gap. Payload's own upload pipeline re-encodes the *original*
+// file through sharp for any format it considers resizable (EXIF auto-rotation, mostly) the
+// moment a temp file is involved, regardless of whether resizing/format conversion was actually
+// requested — so simply allowlisting image/heic in `mimeTypes` below and leaving it at that
+// would make every real (multipart, temp-file) HEIC upload hit that same "not built in" wall,
+// not just resizes. Converting to JPEG ourselves *before* Payload's pipeline ever sees a HEIC
+// mimetype sidesteps that entirely: from this hook onward the file just looks like a completely
+// ordinary JPEG upload, going through the exact same well-exercised code path every JPEG/PNG/
+// TIFF/WebP upload already does.
+const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif'])
+
+const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation }) => {
+  if (operation !== 'create' && operation !== 'update') return
+  const file = req.file
+  if (!file || !HEIC_MIME_TYPES.has(file.mimetype)) return
+  const source = file.tempFilePath ? await fs.readFile(file.tempFilePath) : file.data
+  // rotate() bakes in the EXIF orientation before the re-encode strips metadata (sharp's
+  // default JPEG output drops EXIF, so skipping this would silently un-rotate sideways
+  // photos) — the same reason Payload's own pipeline always calls rotate() too.
+  const jpegBuffer = await sharp(source).rotate().jpeg({ quality: 90 }).toBuffer()
+  const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
+  if (file.tempFilePath) {
+    await fs.writeFile(file.tempFilePath, jpegBuffer)
+  }
+  req.file = { ...file, data: jpegBuffer, mimetype: 'image/jpeg', name: jpegName, size: jpegBuffer.length }
+}
 
 // Field-level access has a slightly different arg shape than collection-level Access (id can be
 // string | number), so `isKuratorOrAdmin` from access/roles doesn't structurally match here.
@@ -42,11 +73,17 @@ export const Photos: CollectionConfig = {
   labels: { singular: 'Foto', plural: 'Fotos' },
   admin: { group: 'Archiv', defaultColumns: ['filename', 'caption', '_status'] },
   upload: {
-    // image/heic|heif deliberately absent: the bundled sharp/libvips cannot decode HEIC
-    // (patent-encumbered codec, "Support for this compression format has not been built in").
-    // iPhones convert HEIC→JPEG client-side when the file input's accept lists concrete types
-    // (see UploadForm). Re-adding HEIC requires a libheif-enabled sharp build — tracked follow-up.
-    mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp'],
+    // HEIC/HEIF decode now works: the production image (Dockerfile) compiles sharp from
+    // source against Alpine's system libvips, which has HEIC support as a dynamically-loaded
+    // module (vips-heif, backed by libheif — see Dockerfile comments for the full chain of
+    // packages this needs at both compile and run time). The convertHeicToJpeg beforeOperation
+    // hook above uses that decode capability to turn every HEIC/HEIF upload into a JPEG before
+    // Payload's own upload pipeline ever runs — see that hook's comment for why converting
+    // upfront, rather than just allowlisting the mimetype, is the part that actually matters.
+    // Also covers Payload's own hardcoded canResizeImage()/isImage() lists (payload/dist/
+    // uploads/{canResizeImage,isImage}.js), which don't recognize image/heic|heif as of
+    // 3.87.x — irrelevant here since the hook makes sure Payload never sees that mimetype.
+    mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp', 'image/heic', 'image/heif'],
     imageSizes: [
       { name: 'thumbnail', width: 400 },
       { name: 'web', width: 1600 },
@@ -56,6 +93,7 @@ export const Photos: CollectionConfig = {
   versions: { drafts: true },
   access: { read: canReadPhoto, create: ({ req }) => Boolean(req.user), update: canUpdatePhoto, delete: isAdmin },
   hooks: {
+    beforeOperation: [convertHeicToJpeg],
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
         if (operation === 'create' && req.user) {

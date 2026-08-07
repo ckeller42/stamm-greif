@@ -15,6 +15,6 @@ export const de = {
     caption: 'Beschreibung (optional)', year: 'Jahr (optional)', submit: 'Hochladen',
     success: 'Danke! Deine Fotos werden von einem Kurator geprüft und dann veröffentlicht.',
     error: 'Hochladen fehlgeschlagen — bitte erneut versuchen.',
-    formats: 'JPEG, PNG, TIFF oder WebP — iPhone-Fotos aus der Mediathek werden beim Auswählen in der Regel automatisch konvertiert.',
+    formats: 'JPEG, PNG, TIFF, WebP oder HEIC — iPhone-Fotos werden jetzt direkt unterstützt.',
     status: { wartet: 'wartet', laedt: 'lädt', fertig: 'fertig', fehler: 'fehler' } },
 } as const
