@@ -1,5 +1,5 @@
 import type { Access, CollectionBeforeOperationHook, CollectionConfig, FieldAccess, Where } from 'payload'
-import fs from 'node:fs/promises'
+import { ValidationError } from 'payload'
 import sharp from 'sharp'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
@@ -8,28 +8,73 @@ import { fuzzyDateFields } from '@/fields/fuzzy-date'
 // only ever write other formats, never HEIC itself — "heifsave: Unsupported compression" is
 // libvips' error for exactly that gap. Payload's own upload pipeline re-encodes the *original*
 // file through sharp for any format it considers resizable (EXIF auto-rotation, mostly) the
-// moment a temp file is involved, regardless of whether resizing/format conversion was actually
-// requested — so simply allowlisting image/heic in `mimeTypes` below and leaving it at that
-// would make every real (multipart, temp-file) HEIC upload hit that same "not built in" wall,
-// not just resizes. Converting to JPEG ourselves *before* Payload's pipeline ever sees a HEIC
-// mimetype sidesteps that entirely: from this hook onward the file just looks like a completely
-// ordinary JPEG upload, going through the exact same well-exercised code path every JPEG/PNG/
-// TIFF/WebP upload already does.
-const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif'])
+// moment resizeOptions/formatOptions/trimOptions/constructorOptions are configured — so simply
+// allowlisting image/heic in `mimeTypes` below and leaving it at that would make every HEIC
+// upload hit that same "not built in" wall the moment any of those got configured, not just
+// resizes. Converting to JPEG ourselves *before* Payload's pipeline ever sees a HEIC mimetype
+// sidesteps that entirely: from this hook onward the file just looks like a completely ordinary
+// JPEG upload, going through the exact same well-exercised code path every JPEG/PNG/TIFF/WebP
+// upload already does.
+//
+// Note this project never enables Payload's `useTempFiles` (payload.config.ts's default,
+// `false`, is left as-is), so `req.file.data` is always the full in-memory buffer — no
+// tempFilePath branch needed here.
+const HEIC_FTYP_BRANDS = new Set(['heic', 'heix', 'heif', 'mif1', 'msf1'])
+
+// Structural check, not a trust of the declared Content-Type: an ISOBMFF `ftyp` box (bytes 4-7
+// literally spell "ftyp") naming a HEIC/HEIF brand (bytes 8-11). This is what actually gates
+// decoding below, for two reasons that cut in opposite directions:
+// - a real HEIC file the client mislabeled (e.g. sent as application/octet-stream, which
+//   browsers do for HEIC fairly often) still gets caught and converted here, because this
+//   doesn't depend on what the client claimed at all;
+// - conversely, we never hand arbitrary attacker-controlled bytes to libheif just because a
+//   request *declared* Content-Type: image/heic — an authenticated member could otherwise feed
+//   any bytes they like straight into the decoder. If the declared mimetype says HEIC but the
+//   bytes don't structurally look like one, this function returns false, the hook below leaves
+//   the file untouched, and Payload's own checkFileRestrictions (content-sniffing the *real*
+//   type) is what decides whether to reject it — not us, and not libheif.
+function looksLikeHeic(buf: Buffer): boolean {
+  return (
+    buf.length >= 12 &&
+    buf.toString('ascii', 4, 8) === 'ftyp' &&
+    HEIC_FTYP_BRANDS.has(buf.toString('ascii', 8, 12))
+  )
+}
 
 const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation }) => {
   if (operation !== 'create' && operation !== 'update') return
   const file = req.file
-  if (!file || !HEIC_MIME_TYPES.has(file.mimetype)) return
-  const source = file.tempFilePath ? await fs.readFile(file.tempFilePath) : file.data
-  // rotate() bakes in the EXIF orientation before the re-encode strips metadata (sharp's
-  // default JPEG output drops EXIF, so skipping this would silently un-rotate sideways
-  // photos) — the same reason Payload's own pipeline always calls rotate() too.
-  const jpegBuffer = await sharp(source).rotate().jpeg({ quality: 90 }).toBuffer()
-  const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
-  if (file.tempFilePath) {
-    await fs.writeFile(file.tempFilePath, jpegBuffer)
+  if (!file || !looksLikeHeic(file.data)) return
+  let jpegBuffer: Buffer
+  try {
+    // rotate() bakes in the EXIF orientation before the re-encode strips metadata (sharp's
+    // default JPEG output drops EXIF, so skipping this would silently un-rotate sideways
+    // photos) — the same reason Payload's own pipeline always calls rotate() too.
+    jpegBuffer = await sharp(file.data).rotate().jpeg({ quality: 90 }).toBuffer()
+  } catch (err) {
+    // A file that structurally looks like a HEIC container (looksLikeHeic passed) but is
+    // truncated, corrupt, or uses a codec/profile libheif doesn't support still reaches here —
+    // sharp/libvips throws a raw Error with English internals-facing text (e.g. "heif: ..."),
+    // which would otherwise surface as an uncaught 500 with that text shown to the user.
+    // ValidationError gives a proper 400 with German copy instead, same shape as any other
+    // field-validation failure this collection produces.
+    req.payload.logger.error(err)
+    throw new ValidationError(
+      {
+        collection: 'photos',
+        errors: [
+          {
+            path: 'file',
+            message:
+              'Die HEIC-Datei konnte nicht verarbeitet werden — bitte als JPEG exportieren und erneut hochladen.',
+          },
+        ],
+        req,
+      },
+      req.t,
+    )
   }
+  const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
   req.file = { ...file, data: jpegBuffer, mimetype: 'image/jpeg', name: jpegName, size: jpegBuffer.length }
 }
 
@@ -73,16 +118,18 @@ export const Photos: CollectionConfig = {
   labels: { singular: 'Foto', plural: 'Fotos' },
   admin: { group: 'Archiv', defaultColumns: ['filename', 'caption', '_status'] },
   upload: {
-    // HEIC/HEIF decode now works: the production image (Dockerfile) compiles sharp from
-    // source against Alpine's system libvips, which has HEIC support as a dynamically-loaded
-    // module (vips-heif, backed by libheif — see Dockerfile comments for the full chain of
-    // packages this needs at both compile and run time). The convertHeicToJpeg beforeOperation
-    // hook above uses that decode capability to turn every HEIC/HEIF upload into a JPEG before
-    // Payload's own upload pipeline ever runs — see that hook's comment for why converting
-    // upfront, rather than just allowlisting the mimetype, is the part that actually matters.
-    // Also covers Payload's own hardcoded canResizeImage()/isImage() lists (payload/dist/
-    // uploads/{canResizeImage,isImage}.js), which don't recognize image/heic|heif as of
-    // 3.87.x — irrelevant here since the hook makes sure Payload never sees that mimetype.
+    // HEIC/HEIF decode now works (production image compiles sharp against Alpine's system
+    // libvips + libheif — see Dockerfile), and convertHeicToJpeg above converts every genuine
+    // HEIC/HEIF upload to JPEG before Payload's own upload pipeline ever sees the mimetype. On
+    // that normal path, checkFileRestrictions (Payload's mimeTypes enforcement) only ever
+    // observes image/jpeg for a HEIC-origin upload — these two entries don't gate it.
+    // They still matter for two other things: (1) Payload's admin UI derives the upload
+    // widget's file-picker `accept` attribute from this list, so curators/admins uploading
+    // via /admin need HEIC listed to even select one; (2) the sniff-bypass path — a file
+    // declared image/heic whose bytes don't structurally pass convertHeicToJpeg's magic-byte
+    // check (see that function's comment) is deliberately left unconverted, and needs to still
+    // be an allowed mimetype for checkFileRestrictions to make its own (correct) call on it
+    // rather than being rejected purely for the label.
     mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp', 'image/heic', 'image/heif'],
     imageSizes: [
       { name: 'thumbnail', width: 400 },

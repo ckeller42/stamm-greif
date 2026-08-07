@@ -4,8 +4,6 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { getPayload, type Payload } from 'payload'
 import config from '@payload-config'
-import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 
 let payload: Payload
 let memberEmail: string
@@ -30,43 +28,11 @@ async function loginCookie(): Promise<string> {
   return res.headers.get('set-cookie') ?? ''
 }
 
-describe('HEIC upload', () => {
-  it('a genuine HEIC upload succeeds now that the server can decode it', async () => {
-    const cookie = await loginCookie()
-    const body = new FormData()
-    // Real HEIC bytes (tests/fixtures/dia.heic, generated from dia.jpg via `sips`), not just a
-    // declared content-type — this exercises Payload's actual content-sniffed file-type
-    // detection plus the server's HEIC decode path (Dockerfile: sharp compiled against system
-    // libvips + vips-heif/libheif) via Photos.ts's convertHeicToJpeg beforeOperation hook. This
-    // is the flip side of the former HEIC-rejection regression test: reverting the Photos.ts
-    // mimeTypes allowlist, the conversion hook, or the Dockerfile's HEIC decode setup would
-    // make this request fail instead of succeeding.
-    const heicPath = path.resolve(process.cwd(), 'tests/fixtures/dia.heic')
-    const heicBytes = await readFile(heicPath)
-    body.append('file', new Blob([heicBytes], { type: 'image/heic' }), 'foto.heic')
-    body.append('_payload', JSON.stringify({ datePrecision: 'unknown', _status: 'draft' }))
-    const res = await fetch('http://localhost:3000/api/photos', {
-      method: 'POST', headers: { cookie }, body,
-    })
-    const json = (await res.json()) as {
-      doc?: { id: number; _status: string; width?: number; height?: number; mimeType?: string; filename?: string }
-      errors?: { message: string }[]
-    }
-    expect(res.status, JSON.stringify(json.errors)).toBe(201)
-    expect(json.doc?._status).toBe('draft')
-    // The stored file is JPEG, not HEIC: convertHeicToJpeg (Photos.ts) converts on the way in,
-    // because Alpine's libheif can decode HEIC but has no HEVC encoder to write it back out
-    // (see that hook's comment) — and because a HEIC file sitting in the archive unconverted
-    // wouldn't even render in most browsers. width/height being populated at all confirms the
-    // file was actually decoded (a server that couldn't decode HEIC would fail the conversion
-    // and this request would 400, not silently store zero dimensions).
-    expect(json.doc?.mimeType).toBe('image/jpeg')
-    expect(json.doc?.filename).toMatch(/\.jpg$/)
-    expect(json.doc?.width).toBe(100)
-    expect(json.doc?.height).toBe(100)
-  })
-})
-
+// HEIC/HEIF upload tests (genuine decode, orientation, corrupt-file handling) live in
+// tests/int/heic.int.test.ts — capability-gated there since sharp's own prebuilt (what `pnpm
+// dev` on a CI runner uses) never advertises HEIC decode support. This file keeps the
+// mime-allowlist-rejection regression coverage (below, now using GIF) plus the unrelated
+// Fehler-ID/health-endpoint concerns its name refers to.
 describe('error responses carry a Fehler-ID', () => {
   it('rejected upload (disallowed mime) returns message with Fehler-ID', async () => {
     const cookie = await loginCookie()
