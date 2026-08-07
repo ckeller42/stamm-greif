@@ -1,3 +1,8 @@
+# Explicit project name: without it, this file and the production docker-compose.yml share the
+# directory-derived project "stamm-greif", so their identically-named `db` services collide —
+# `up -d db` from one file silently recreates the OTHER stack's container on the wrong volume
+# (this happened; see git history of the heic-support branch).
+name: stamm-greif-dev
 services:
   db:
     image: postgres:17-alpine
