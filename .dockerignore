@@ -24,6 +24,8 @@ docs
 
 # Tests & coverage
 tests
+# ...except the real HEIC fixture the `run` stage's build-time decode probe needs (Dockerfile).
+!tests/fixtures/dia.heic
 coverage
 playwright-report
 test-results
