@@ -7,11 +7,25 @@
 #   (OFFSITE_TARGET is used as a literal rsync destination prefix — include the trailing ":"
 #   for a remote-shell target or "/" for a local path; this is what lets the same script and
 #   the same cron line work for both, see betrieb.md.)
-# Run from the repo directory (e.g. /opt/archiv) so `$(basename "$PWD")` matches the compose
-# project name and therefore the actual docker volume name for uploads.
+# Run from the repo directory (e.g. /opt/archiv) so `docker compose config` below resolves the
+# right project. Requires jq (apt/apk install jq) — already a documented prerequisite for
+# scripts/errors.sh.
 set -euo pipefail
 
 : "${OFFSITE_TARGET:?Set OFFSITE_TARGET, e.g. u123@u123.your-storagebox.de: or a local path for testing}"
+
+# docker-compose.yml pins an explicit `name: stamm-greif`, so the project — and therefore the
+# uploads volume name below — no longer depends on the checkout directory's basename (it used to
+# be derived as `$(basename "$PWD")_uploads`, which silently breaks the moment the repo lives
+# anywhere other than a directory literally named "stamm-greif", e.g. the documented production
+# path /opt/archiv). Ask Compose itself instead, so this can never drift out of sync with
+# whatever the project name actually is.
+PROJECT=$(docker compose config --format json | jq -r .name)
+: "${PROJECT:?Could not determine the Compose project name (docker compose config | jq -r .name returned empty/null)}"
+if [ "$PROJECT" = "null" ]; then
+  echo "Could not determine the Compose project name (docker compose config | jq -r .name returned null)" >&2
+  exit 1
+fi
 
 STAMP=$(date +%F)
 BACKUP_DIR=/var/backups/archiv
@@ -27,7 +41,7 @@ docker compose exec -T db pg_dump -U archiv archiv | gzip > "$TMP"
 mv "$TMP" "$DUMP"
 
 # uploads: rsync the docker volume to the offsite target (Hetzner Storage Box via ssh)
-rsync -az "/var/lib/docker/volumes/$(basename "$PWD")_uploads/_data/" \
+rsync -az "/var/lib/docker/volumes/${PROJECT}_uploads/_data/" \
   "${OFFSITE_TARGET}backups/archiv/uploads/"
 # --exclude keeps any leftover *.tmp (from a concurrent/failed run) out of the offsite copy.
 rsync -az --exclude='*.tmp' "$BACKUP_DIR/" "${OFFSITE_TARGET}backups/archiv/db/"

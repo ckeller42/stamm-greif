@@ -97,8 +97,12 @@ docker compose up -d db
 gunzip < db-JJJJ-MM-TT.sql.gz | docker compose exec -T db psql -U archiv archiv
 
 # Uploads zurückspielen (Pfad zum tatsächlichen Docker-Volume, nicht in den Container-Pfad!):
+# Der Volume-Name beginnt mit dem Compose-Projektnamen, der in docker-compose.yml fest auf
+# "stamm-greif" gepinnt ist (name: stamm-greif) — unabhängig vom tatsächlichen Checkout-Pfad
+# (z. B. /opt/archiv). Nicht mit $(basename "$PWD") herleiten, das war der alte, vor dem Pin
+# verwendete Ansatz und stimmt auf /opt/archiv nicht mit dem echten Volume-Namen überein.
 rsync -az backups/archiv/uploads/ \
-  /var/lib/docker/volumes/$(basename "$PWD")_uploads/_data/
+  /var/lib/docker/volumes/stamm-greif_uploads/_data/
 
 docker compose up -d --build   # App + Caddy starten
 ```

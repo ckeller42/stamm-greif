@@ -1,6 +1,89 @@
-import type { Access, CollectionConfig, FieldAccess, Where } from 'payload'
+import type { Access, CollectionBeforeOperationHook, CollectionConfig, FieldAccess, Where } from 'payload'
+import { ValidationError } from 'payload'
+import sharp from 'sharp'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
+
+// Alpine's libheif (see Dockerfile) can *decode* HEIC/HEIF but has no HEVC encoder, so it can
+// only ever write other formats, never HEIC itself — "heifsave: Unsupported compression" is
+// libvips' error for exactly that gap. Payload's own upload pipeline re-encodes the *original*
+// file through sharp for any format it considers resizable (EXIF auto-rotation, mostly) the
+// moment resizeOptions/formatOptions/trimOptions/constructorOptions are configured — so simply
+// allowlisting image/heic in `mimeTypes` below and leaving it at that would make every HEIC
+// upload hit that same "not built in" wall the moment any of those got configured, not just
+// resizes. Converting to JPEG ourselves *before* Payload's pipeline ever sees a HEIC mimetype
+// sidesteps that entirely: from this hook onward the file just looks like a completely ordinary
+// JPEG upload, going through the exact same well-exercised code path every JPEG/PNG/TIFF/WebP
+// upload already does.
+//
+// Note this project never enables Payload's `useTempFiles` (payload.config.ts's default,
+// `false`, is left as-is), so `req.file.data` is always the full in-memory buffer — no
+// tempFilePath branch needed here.
+const HEIC_FTYP_BRANDS = new Set(['heic', 'heix', 'heif', 'mif1', 'msf1'])
+
+// Structural check, not a trust of the declared Content-Type: an ISOBMFF `ftyp` box (bytes 4-7
+// literally spell "ftyp") naming a HEIC/HEIF brand (bytes 8-11). This is what actually gates
+// decoding below, for two reasons that cut in opposite directions:
+// - a real HEIC file the client mislabeled (e.g. sent as application/octet-stream, which
+//   browsers do for HEIC fairly often) still gets caught and converted here, because this
+//   doesn't depend on what the client claimed at all;
+// - conversely, we never hand arbitrary attacker-controlled bytes to libheif just because a
+//   request *declared* Content-Type: image/heic — an authenticated member could otherwise feed
+//   any bytes they like straight into the decoder. If the declared mimetype says HEIC but the
+//   bytes don't structurally look like one, this function returns false, the hook below leaves
+//   the file untouched, and Payload's own checkFileRestrictions (content-sniffing the *real*
+//   type) is what decides whether to reject it — not us, and not libheif.
+function looksLikeHeic(buf: Buffer): boolean {
+  return (
+    buf.length >= 12 &&
+    buf.toString('ascii', 4, 8) === 'ftyp' &&
+    HEIC_FTYP_BRANDS.has(buf.toString('ascii', 8, 12))
+  )
+}
+
+const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation }) => {
+  if (operation !== 'create' && operation !== 'update') return
+  const file = req.file
+  if (!file || !looksLikeHeic(file.data)) return
+  let jpegBuffer: Buffer
+  try {
+    // rotate() bakes in orientation before the re-encode strips metadata — kept for the same
+    // reason Payload's own pipeline always calls it too, and it's a correct no-op here rather
+    // than dead weight. But note (verified via direct testing, tests/int/heic.int.test.ts has
+    // the full writeup): for HEIC/HEIF specifically, this call doesn't actually do anything.
+    // libvips' HEIF loader applies both forms of HEIC orientation it recognizes — the `irot`
+    // transformative property (what real photos use) and, empirically, embedded EXIF
+    // Orientation tags too when present — unconditionally at *decode* time, before sharp's
+    // JS-level rotate() logic (designed for formats like JPEG/TIFF that defer orientation to
+    // the caller) ever gets a chance to act. Confirmed with three independent test fixtures
+    // that calling/not-calling rotate() produces byte-identical dimensions for every one.
+    jpegBuffer = await sharp(file.data).rotate().jpeg({ quality: 90 }).toBuffer()
+  } catch (err) {
+    // A file that structurally looks like a HEIC container (looksLikeHeic passed) but is
+    // truncated, corrupt, or uses a codec/profile libheif doesn't support still reaches here —
+    // sharp/libvips throws a raw Error with English internals-facing text (e.g. "heif: ..."),
+    // which would otherwise surface as an uncaught 500 with that text shown to the user.
+    // ValidationError gives a proper 400 with German copy instead, same shape as any other
+    // field-validation failure this collection produces.
+    req.payload.logger.error(err)
+    throw new ValidationError(
+      {
+        collection: 'photos',
+        errors: [
+          {
+            path: 'file',
+            message:
+              'Die HEIC-Datei konnte nicht verarbeitet werden — bitte als JPEG exportieren und erneut hochladen.',
+          },
+        ],
+        req,
+      },
+      req.t,
+    )
+  }
+  const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
+  req.file = { ...file, data: jpegBuffer, mimetype: 'image/jpeg', name: jpegName, size: jpegBuffer.length }
+}
 
 // Field-level access has a slightly different arg shape than collection-level Access (id can be
 // string | number), so `isKuratorOrAdmin` from access/roles doesn't structurally match here.
@@ -42,11 +125,19 @@ export const Photos: CollectionConfig = {
   labels: { singular: 'Foto', plural: 'Fotos' },
   admin: { group: 'Archiv', defaultColumns: ['filename', 'caption', '_status'] },
   upload: {
-    // image/heic|heif deliberately absent: the bundled sharp/libvips cannot decode HEIC
-    // (patent-encumbered codec, "Support for this compression format has not been built in").
-    // iPhones convert HEIC→JPEG client-side when the file input's accept lists concrete types
-    // (see UploadForm). Re-adding HEIC requires a libheif-enabled sharp build — tracked follow-up.
-    mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp'],
+    // HEIC/HEIF decode now works (production image compiles sharp against Alpine's system
+    // libvips + libheif — see Dockerfile), and convertHeicToJpeg above converts every genuine
+    // HEIC/HEIF upload to JPEG before Payload's own upload pipeline ever sees the mimetype. On
+    // that normal path, checkFileRestrictions (Payload's mimeTypes enforcement) only ever
+    // observes image/jpeg for a HEIC-origin upload — these two entries don't gate it.
+    // They still matter for two other things: (1) Payload's admin UI derives the upload
+    // widget's file-picker `accept` attribute from this list, so curators/admins uploading
+    // via /admin need HEIC listed to even select one; (2) the sniff-bypass path — a file
+    // declared image/heic whose bytes don't structurally pass convertHeicToJpeg's magic-byte
+    // check (see that function's comment) is deliberately left unconverted, and needs to still
+    // be an allowed mimetype for checkFileRestrictions to make its own (correct) call on it
+    // rather than being rejected purely for the label.
+    mimeTypes: ['image/jpeg', 'image/png', 'image/tiff', 'image/webp', 'image/heic', 'image/heif'],
     imageSizes: [
       { name: 'thumbnail', width: 400 },
       { name: 'web', width: 1600 },
@@ -56,6 +147,7 @@ export const Photos: CollectionConfig = {
   versions: { drafts: true },
   access: { read: canReadPhoto, create: ({ req }) => Boolean(req.user), update: canUpdatePhoto, delete: isAdmin },
   hooks: {
+    beforeOperation: [convertHeicToJpeg],
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
         if (operation === 'create' && req.user) {

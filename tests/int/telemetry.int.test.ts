@@ -28,25 +28,26 @@ async function loginCookie(): Promise<string> {
   return res.headers.get('set-cookie') ?? ''
 }
 
+// HEIC/HEIF upload tests (genuine decode, orientation, corrupt-file handling) live in
+// tests/int/heic.int.test.ts — capability-gated there since sharp's own prebuilt (what `pnpm
+// dev` on a CI runner uses) never advertises HEIC decode support. This file keeps the
+// mime-allowlist-rejection regression coverage (below, now using GIF) plus the unrelated
+// Fehler-ID/health-endpoint concerns its name refers to.
 describe('error responses carry a Fehler-ID', () => {
   it('rejected upload (disallowed mime) returns message with Fehler-ID', async () => {
     const cookie = await loginCookie()
     const body = new FormData()
-    // A minimal ISOBMFF ftyp box with a 'heic' major brand — genuinely content-sniffed as
-    // image/heic by Payload's file-type detection (checkFileRestrictions), not just declared
-    // via the Blob's content-type or filename extension. image/heic is not in the Photos
-    // mimeTypes allowlist (see Photos.ts), so detection succeeds but the allowlist check
-    // rejects it. This is the regression test for the HEIC allowlist fix: reverting the
-    // allowlist change would make this request succeed instead of failing here.
-    const ftypHeic = new Uint8Array([
-      0x00, 0x00, 0x00, 0x18, // box size 24
-      0x66, 0x74, 0x79, 0x70, // 'ftyp'
-      0x68, 0x65, 0x69, 0x63, // major brand 'heic'
-      0x00, 0x00, 0x00, 0x00, // minor version
-      0x68, 0x65, 0x69, 0x63, // compatible brand 'heic'
-      0x6d, 0x69, 0x66, 0x31, // compatible brand 'mif1'
+    // Real GIF magic bytes (GIF89a header) so this is genuinely content-sniffed as image/gif
+    // by Payload's file-type detection (checkFileRestrictions), not just declared via the
+    // Blob's content-type or filename extension. image/gif is not in the Photos mimeTypes
+    // allowlist (see Photos.ts), so detection succeeds but the allowlist check rejects it —
+    // this keeps the Fehler-ID/mime-rejection path covered now that HEIC itself is allowed.
+    const gif89a = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // 'GIF89a'
+      0x01, 0x00, 0x01, 0x00, // 1x1 logical screen descriptor
+      0x00, 0x00, 0x00, // packed fields, background color, aspect ratio
     ])
-    body.append('file', new Blob([ftypHeic], { type: 'image/heic' }), 'foto.heic')
+    body.append('file', new Blob([gif89a], { type: 'image/gif' }), 'foto.gif')
     body.append('_payload', JSON.stringify({ datePrecision: 'unknown', _status: 'draft' }))
     const res = await fetch('http://localhost:3000/api/photos', {
       method: 'POST', headers: { cookie }, body,
@@ -56,9 +57,9 @@ describe('error responses carry a Fehler-ID', () => {
       errors?: { message: string; data?: { errors?: { message: string }[] } }[]
     }
     expect(json.errors?.[0]?.message).toMatch(/Fehler-ID: [0-9a-f]{6}/)
-    // Confirms the rejection is the mime-allowlist check (naming image/heic), not a
+    // Confirms the rejection is the mime-allowlist check (naming image/gif), not a
     // decode/extension-fallback error.
-    expect(json.errors?.[0]?.data?.errors?.[0]?.message).toBe('Invalid MIME type: image/heic.')
+    expect(json.errors?.[0]?.data?.errors?.[0]?.message).toBe('Invalid MIME type: image/gif.')
   })
 })
 

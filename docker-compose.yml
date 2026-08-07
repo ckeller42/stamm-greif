@@ -1,6 +1,14 @@
 # Production deployment for one VPS: app (Next/Payload) + Postgres + Caddy (TLS termination).
 # See docs/betrieb.md for Erststart, Backup, Restore, Monitoring. Local verification uses
 # Caddyfile.localhost instead of the production Caddyfile (see that doc's "Verify" section).
+#
+# Explicit project name (symmetric with docker-compose.dev.yml's `name: stamm-greif-dev`):
+# without one, Compose derives the project name from the directory, which happens to already
+# be "stamm-greif" here — this pins it so it can never silently change (e.g. if the repo is
+# ever checked out under a different directory name) and drift out of sync with the dev file's
+# explicit name again. Volume names (stamm-greif_uploads, etc.) are unchanged by this — the
+# directory basename already matched — confirmed via `docker compose config` before/after.
+name: stamm-greif
 services:
   app:
     build:

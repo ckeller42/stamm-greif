@@ -12,7 +12,15 @@ organizes together.
 
 1. `pnpm install`
 2. `docker compose -f docker-compose.dev.yml up -d` — starts local Postgres (`db` on `:5432`,
-   plus `db-test` on `:5433` for integration tests)
+   plus `db-test` on `:5433` for integration tests). That file pins an explicit Compose project
+   name (`stamm-greif-dev`, distinct from the production compose file's `stamm-greif`) so the
+   two files' identically-named `db` services can never collide and recreate each other's
+   container on the wrong volume — this changed once (heic-support branch), under a new project
+   name Docker treats the dev/test volumes as new, so both start empty. That's expected and
+   nothing to recover: dev data here is disposable scratch — `pnpm dev`'s push mode (or `pnpm
+   payload migrate`) rebuilds the schema on first connect, and `pnpm test:e2e` seeds its own
+   fixtures via `tests/e2e/global-setup.ts`. "Re-run this step" above means the `docker compose
+   up` command itself, not any kind of data recovery.
 3. `cp .env.example .env` and fill in `PAYLOAD_SECRET` (`DATABASE_URI` already points at the
    dev db above)
 4. `pnpm dev` — open `http://localhost:3000/anmelden`, follow the on-screen instructions to
