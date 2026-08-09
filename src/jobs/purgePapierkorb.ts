@@ -46,21 +46,30 @@ export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ r
   // include false positives too (see the guard below).
   const { docs: draftAwareOverdue } = await req.payload.find({ ...findBase, draft: true })
 
-  // Fix round 2 (OVER-DELETION): a candidate found ONLY via the draft-aware query — i.e. not
-  // already qualified via the direct main-row check above — might be a document that is fully
-  // published and publicly LIVE right now (main row `_status: 'published'`, `deletedAt: null`)
-  // whose only "deleted" signal sits in an abandoned, never-published draft (a curator started
-  // a soft-delete, saved as draft instead of publishing, then walked away). Purging that would
-  // hard-delete a currently-visible photo, files included — the exact scenario the review round
-  // that added this guard was worried about. A candidate may only actually purge here if its
-  // real main-row state agrees: EITHER the main row doesn't exist at all (nothing published, so
-  // nothing public to protect — verified via create.js this is essentially never true in
-  // practice, since `create` always writes the main row even for a draft-status document, but
-  // checked anyway rather than assumed) OR the main row's OWN `deletedAt` is also set (the
-  // deletion did make it to the live row, just via a path this candidate-set also happens to
-  // include — in which case it was already in `qualifiedIds` from step (a) and this is a no-op
-  // add). Anything else — main row exists, live, `deletedAt` unset — is left alone and logged,
-  // not silently dropped, so a curator can find and finish (publish) the soft-delete themselves.
+  // Fix round 2 (OVER-DELETION), corrected in round 3: a candidate found ONLY via the
+  // draft-aware query — i.e. not already qualified via the direct main-row check above — needs
+  // one more check, but round 2's own first attempt at that check (`liveDoc && !liveDoc.
+  // deletedAt` → skip) was ITSELF wrong, and re-broke H1 for the single most common Papierkorb
+  // shape: a member's upload that was NEVER published (main row `_status: 'draft'` from
+  // `create`, which always writes a main row — collections/operations/create.js — regardless of
+  // draft status) which a curator then bins via a draft update. That main row's `deletedAt` is
+  // also null (`isSavingDraft` skips the main-row write on that update, same as any draft-only
+  // change — this is H1's original finding), so round 2's check saw "main row exists,
+  // `deletedAt` unset" and skipped it forever — but there is no publicly-live state to protect
+  // there at all: the doc was never published, so its latest DRAFT genuinely is its only
+  // authoritative state, and that draft says deleted.
+  //
+  // The distinction round 2 was missing is `_status`, not just `deletedAt`. There is only a
+  // live/public state worth protecting when the main row is PUBLISHED:
+  //   - main row `_status: 'published'`, `deletedAt` unset → genuinely live and unbinned (a
+  //     curator started a soft-delete, saved as draft instead of publishing, then walked away)
+  //     → skip + warn. This is round 2's actual target scenario, still caught correctly.
+  //   - main row `_status: 'draft'` (never published, or explicitly unpublished) → nothing
+  //     public to protect regardless of the main row's `deletedAt` — the latest draft IS the
+  //     doc's authoritative state → purge. This restores H1.
+  //   - main row absent entirely → nothing published, nothing to protect → purge (checked
+  //     defensively; per create.js this is essentially never true in practice, since `create`
+  //     always writes the main row even for a draft-status document).
   for (const candidate of draftAwareOverdue) {
     if (qualifiedIds.has(candidate.id)) continue
     const liveDoc = await req.payload.findByID({
@@ -71,7 +80,7 @@ export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ r
       depth: 0,
       req,
     })
-    if (liveDoc && !liveDoc.deletedAt) {
+    if (liveDoc && !liveDoc.deletedAt && liveDoc._status === 'published') {
       req.payload.logger.warn({ msg: 'papierkorb-purge-skip-unbinned-live', id: candidate.id })
       continue
     }

@@ -23,7 +23,11 @@ beforeAll(async () => {
 // no `user` avoids that entirely, same as the brief's "overrideAccess create + update" call.
 // Two calls (create then update), not one, because Photos requires an uploaded file on create
 // and setting `deletedAt` at creation time is exactly the shape a real curator's soft-delete
-// action takes (create already exists, then a later update sets deletedAt).
+// action takes (create already exists, then a later update sets deletedAt). No `draft: true`
+// here, so `isSavingDraft` is false and the update writes the main row directly — the third of
+// the three shapes purgePapierkorb.ts's qualification rule distinguishes: published, binned via
+// an ordinary (non-draft) update, main row's own `deletedAt` set directly. Caught by step (a)'s
+// plain find with no further check needed — see the `it()` just below.
 async function createSoftDeletedPhoto(deletedAt: Date) {
   const doc = await payload.create({
     collection: 'photos', filePath: fixture,
@@ -41,22 +45,47 @@ async function existsById(id: number): Promise<boolean> {
   return Boolean(found)
 }
 
-// A soft-delete that only ever lands in a DRAFT, never published — e.g. a curator mid-edit who
-// saves as draft rather than publish. Payload's own update path
-// (collections/operations/utilities/update.js) skips writing the main `photos` row entirely
-// whenever `isSavingDraft` is true, so `deletedAt` lands only in `_photos_v`; the main row stays
-// exactly as it was before this call — still fully published and live. Verified directly against
-// a raw `select deleted_at from photos` after exactly this call (see the report's fix-round
-// section for the transcript). `draft: true` + `_status: 'draft'` on the update is what triggers
-// that path; overrideAccess: true for the same reason createSoftDeletedPhoto uses it above.
+// A soft-delete that only ever lands in a DRAFT, never published — starting from an ALREADY-
+// PUBLISHED photo. E.g. a curator mid-edit who saves as draft rather than publish. Payload's own
+// update path (collections/operations/utilities/update.js) skips writing the main `photos` row
+// entirely whenever `isSavingDraft` is true, so `deletedAt` lands only in `_photos_v`; the main
+// row stays exactly as it was before this call — still `_status: 'published'`, still fully live.
+// Verified directly against a raw `select deleted_at, _status from photos` after exactly this
+// call (see the report's fix-round section for the transcript). `draft: true` +
+// `_status: 'draft'` on the update is what triggers that path; overrideAccess: true for the same
+// reason createSoftDeletedPhoto uses it above.
 //
-// Used by the "over-deletion guard" test below — this data shape is now understood (fix round 2)
-// as the dangerous ambiguous case, not a safe-to-purge one: without further checking, the main
-// row it leaves behind is indistinguishable from "still genuinely live and public."
+// Used by the "over-deletion guard" test below — a PUBLISHED-and-LIVE main row with an abandoned
+// binned draft on top is the one shape that genuinely must NOT purge (see
+// createNeverPublishedBinnedDraft just below for the contrasting shape that must).
 async function createDraftSoftDeletedPhoto(deletedAt: Date) {
   const doc = await payload.create({
     collection: 'photos', filePath: fixture,
     data: { caption: 'Purge-Test (Draft)', datePrecision: 'year', dateValue: '1980', _status: 'published' },
+    overrideAccess: true,
+  })
+  await payload.update({
+    collection: 'photos', id: doc.id, draft: true,
+    data: { deletedAt: deletedAt.toISOString(), _status: 'draft' },
+    overrideAccess: true,
+  })
+  return doc.id
+}
+
+// H1's ORIGINAL scenario, and the bulk of real Papierkorb content: a photo that was NEVER
+// published — a member's upload sits as `_status: 'draft'` until a curator moderates it (see
+// Photos.ts's beforeChange hook) — which a curator bins directly from that draft state, still
+// without ever publishing it. `create` always writes a main row regardless of `_status`
+// (collections/operations/create.js has no `isSavingDraft` guard around its `payload.db.create`
+// call, unlike update), so the main row exists here too — but with `_status: 'draft'`,
+// `deletedAt: null`, exactly like createDraftSoftDeletedPhoto's main row. The two are only
+// distinguishable by `_status`: this one was never live/public at all, so its latest draft IS
+// its authoritative state, and purging it is correct — that distinction (not `deletedAt` alone)
+// is exactly what fix round 3 corrected in src/jobs/purgePapierkorb.ts's guard.
+async function createNeverPublishedBinnedDraft(deletedAt: Date) {
+  const doc = await payload.create({
+    collection: 'photos', filePath: fixture,
+    data: { caption: 'Purge-Test (Never Published)', datePrecision: 'year', dateValue: '1980', _status: 'draft' },
     overrideAccess: true,
   })
   await payload.update({
@@ -93,18 +122,43 @@ describe('Papierkorb auto-purge', () => {
   })
 
   it(
+    'hard-deletes a photo that was NEVER published, binned directly from its draft state ' +
+      '(H1, restored in fix round 3)',
+    async () => {
+      // Pins H1's original scenario: the bulk of real Papierkorb content is exactly this shape
+      // (member upload -> draft -> curator bins it, all without ever publishing). Fix round 2's
+      // first attempt at the over-deletion guard skipped this too — it checked only
+      // `!liveDoc.deletedAt`, which is also true here (main row `_status: 'draft'`, `deletedAt:
+      // null`, same as createDraftSoftDeletedPhoto's main row), silently re-breaking H1 for the
+      // common case. Round 3 corrected the guard to also require `liveDoc._status ===
+      // 'published'` before skipping — a draft-status main row was never live/public in the
+      // first place, so there's nothing to protect and the latest draft's `deletedAt` is
+      // authoritative. This test and the one above together pin both halves of that distinction:
+      // same "main row exists, deletedAt null" shape, opposite `_status`, opposite outcome.
+      const id = await createNeverPublishedBinnedDraft(new Date(Date.now() - 31 * DAY_MS))
+      expect(await existsById(id)).toBe(true)
+
+      await payload.jobs.queue({ task: 'purgePapierkorb', input: {}, overrideAccess: true })
+      await payload.jobs.run({ queue: 'default', overrideAccess: true })
+
+      expect(await existsById(id)).toBe(false)
+    },
+  )
+
+  it(
     'does NOT purge a published-and-live photo even when an abandoned newer draft carries an ' +
       'old deletedAt (fix round 2, over-deletion guard)',
     async () => {
-      // Supersedes the original H1 regression test's expectation. H1's fix (draft-aware find,
-      // LATEST-VERSION semantics) correctly surfaces this candidate — but review round 2 caught
-      // that this exact data shape is indistinguishable from a genuinely dangerous one: a photo
-      // that is fully PUBLISHED and LIVE right now (main `photos` row: `_status: 'published'`,
+      // H1's fix (draft-aware find, LATEST-VERSION semantics) correctly surfaces this candidate
+      // — but review round 2 caught that this exact data shape is dangerous: a photo that is
+      // fully PUBLISHED and LIVE right now (main `photos` row: `_status: 'published'`,
       // `deletedAt: null`) whose only "deleted" signal sits in an abandoned draft a curator
       // started and never published. Purging based on the draft alone would hard-delete a
       // currently publicly-visible photo, files included. Correct behavior (src/jobs/
       // purgePapierkorb.ts): leave it alone, and log a warning with the id so a curator can find
-      // and finish (publish) the abandoned soft-delete themselves.
+      // and finish (publish) the abandoned soft-delete themselves. See the test above for the
+      // contrasting (also main-row-deletedAt-null, but `_status: 'draft'`) shape that must
+      // purge — the two together are what actually pin the guard's real behavior.
       const warnSpy = vi.spyOn(payload.logger, 'warn')
       const id = await createDraftSoftDeletedPhoto(new Date(Date.now() - 31 * DAY_MS))
       expect(await existsById(id)).toBe(true)
