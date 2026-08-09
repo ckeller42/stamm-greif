@@ -1,8 +1,17 @@
-import type { Access, CollectionBeforeOperationHook, CollectionConfig, FieldAccess, Where } from 'payload'
+import type {
+  Access,
+  CollectionBeforeChangeHook,
+  CollectionBeforeOperationHook,
+  CollectionConfig,
+  FieldAccess,
+  Where,
+} from 'payload'
 import { ValidationError } from 'payload'
 import sharp from 'sharp'
+import exifReader from 'exif-reader'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
+import { computeExifFill, type ParsedExif } from '@/lib/exif-fill'
 
 // Alpine's libheif (see Dockerfile) can *decode* HEIC/HEIF but has no HEVC encoder, so it can
 // only ever write other formats, never HEIC itself — "heifsave: Unsupported compression" is
@@ -39,6 +48,39 @@ function looksLikeHeic(buf: Buffer): boolean {
     buf.toString('ascii', 4, 8) === 'ftyp' &&
     HEIC_FTYP_BRANDS.has(buf.toString('ascii', 8, 12))
   )
+}
+
+// Reads whatever EXIF the ORIGINAL upload already carries — volunteers entering 40 years of
+// metadata by hand is the actual bottleneck this exists to relieve. Must run before
+// convertHeicToJpeg (see hooks.beforeOperation order below): that hook re-encodes HEIC through
+// sharp's JPEG encoder, which does not carry EXIF forward, so by the time it's done there is
+// nothing left to read. Stashed on req.context (Payload's dedicated hook-to-hook scratch space)
+// rather than mutated onto `data` here, because beforeOperation's `args` shape varies by
+// operation and isn't guaranteed to carry `data` in a stable, typed way — applyExifFill below
+// (a proper beforeChange hook, which does have a stable typed `data`) is where it actually gets
+// applied.
+//
+// try/catch is load-bearing, not defensive boilerplate: sharp's own prebuilt binary (what
+// host-dev / CI's `pnpm dev` webServer uses) cannot decode HEIC at all — see heic.int.test.ts's
+// top-of-file comment for the full writeup of that gap. A HEIC upload's EXIF then simply isn't
+// extracted there (fields stay empty; nothing breaks), while the production container (system
+// libvips + libheif, per the Dockerfile) reads it fine. JPEG/PNG/TIFF EXIF works unconditionally
+// everywhere, since none of them need libheif to decode.
+const extractExifOnUpload: CollectionBeforeOperationHook = async ({ req, operation }) => {
+  if (operation !== 'create' && operation !== 'update') return
+  const file = req.file
+  if (!file) return
+  try {
+    const metadata = await sharp(file.data).metadata()
+    if (metadata.exif) {
+      ;(req.context as { exif?: ParsedExif }).exif = exifReader(metadata.exif) as ParsedExif
+    }
+  } catch (err) {
+    // Corrupt/unreadable EXIF, or (host-dev) a HEIC file sharp's prebuilt binary can't decode at
+    // all — degrade silently. This is purely an enrichment step; it must never block or fail an
+    // upload the way convertHeicToJpeg's decode errors correctly do.
+    req.payload.logger.info({ msg: 'exif-extract-skipped', reason: err instanceof Error ? err.message : String(err) })
+  }
 }
 
 const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation }) => {
@@ -83,6 +125,16 @@ const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation
   }
   const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
   req.file = { ...file, data: jpegBuffer, mimetype: 'image/jpeg', name: jpegName, size: jpegBuffer.length }
+}
+
+// Applies extractExifOnUpload's stashed req.context.exif to the actual document data. Split
+// from that hook because beforeChange (unlike beforeOperation) has a stable, typed `data` to
+// merge into — see extractExifOnUpload's comment for why the two are separate hooks.
+const applyExifFill: CollectionBeforeChangeHook = ({ req, data }) => {
+  const exif = (req.context as { exif?: ParsedExif }).exif
+  if (!exif) return data
+  const fill = computeExifFill(exif, { datePrecision: data.datePrecision, dateValue: data.dateValue })
+  return { ...data, ...fill }
 }
 
 // Field-level access has a slightly different arg shape than collection-level Access (id can be
@@ -147,7 +199,10 @@ export const Photos: CollectionConfig = {
   versions: { drafts: true },
   access: { read: canReadPhoto, create: ({ req }) => Boolean(req.user), update: canUpdatePhoto, delete: isAdmin },
   hooks: {
-    beforeOperation: [convertHeicToJpeg],
+    // extractExifOnUpload must run BEFORE convertHeicToJpeg: the latter re-encodes HEIC through
+    // sharp's JPEG encoder, which drops EXIF, so by the time it's done there is nothing left to
+    // read from the original bytes.
+    beforeOperation: [extractExifOnUpload, convertHeicToJpeg],
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
         if (operation === 'create' && req.user) {
@@ -185,6 +240,7 @@ export const Photos: CollectionConfig = {
         }
         return data
       },
+      applyExifFill,
     ],
   },
   fields: [
@@ -214,6 +270,29 @@ export const Photos: CollectionConfig = {
       // whose own draft still matches canUpdatePhoto's "own draft" branch could otherwise clear
       // deletedAt themselves and undo a curator's moderation decision.
       access: { update: isKuratorOrAdminField },
+    },
+    // Raw capture info from the file's own EXIF (applyExifFill above), kept separate from the
+    // human-editable fuzzy-date fields above — never overrides them, just records what the file
+    // itself already knew. GPS pair powers a future map view; read-only because there's no
+    // sensible manual correction UI for either yet, and both are meant to reflect the file, not
+    // curator input.
+    {
+      name: 'exifTakenAt',
+      type: 'date',
+      label: 'Aufnahmedatum (EXIF)',
+      admin: { readOnly: true, position: 'sidebar' },
+    },
+    {
+      name: 'exifLat',
+      type: 'number',
+      label: 'EXIF-Breitengrad',
+      admin: { readOnly: true, position: 'sidebar' },
+    },
+    {
+      name: 'exifLng',
+      type: 'number',
+      label: 'EXIF-Längengrad',
+      admin: { readOnly: true, position: 'sidebar' },
     },
   ],
 }
