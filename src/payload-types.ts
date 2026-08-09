@@ -123,6 +123,7 @@ export interface Config {
   jobs: {
     tasks: {
       purgePapierkorb: TaskPurgePapierkorb;
+      detectFaces: TaskDetectFaces;
       inline: {
         input: unknown;
         output: unknown;
@@ -469,7 +470,7 @@ export interface PayloadJob {
     | {
         executedAt: string;
         completedAt: string;
-        taskSlug: 'inline' | 'purgePapierkorb';
+        taskSlug: 'inline' | 'purgePapierkorb' | 'detectFaces';
         taskID: string;
         input?:
           | {
@@ -502,7 +503,7 @@ export interface PayloadJob {
         id?: string | null;
       }[]
     | null;
-  taskSlug?: ('inline' | 'purgePapierkorb') | null;
+  taskSlug?: ('inline' | 'purgePapierkorb' | 'detectFaces') | null;
   queue?: string | null;
   waitUntil?: string | null;
   processing?: boolean | null;
@@ -945,6 +946,14 @@ export interface CollectionsWidget {
  * via the `definition` "TaskPurgePapierkorb".
  */
 export interface TaskPurgePapierkorb {
+  input?: unknown;
+  output?: unknown;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskDetectFaces".
+ */
+export interface TaskDetectFaces {
   input?: unknown;
   output?: unknown;
 }

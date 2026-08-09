@@ -12,24 +12,33 @@
 // needs no database for that block, but it lives in tests/int (not tests/unit) because the model
 // files are the constraint, not the DB — `pnpm test:int` is the one script that fetches them
 // first (package.json's test:int runs scripts/fetch-face-models.sh before vitest).
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { getPayload, type Payload } from 'payload'
 import config from '@payload-config'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { cosineSimilarity, similarityThreshold } from '@/lib/faces'
+import { cosineSimilarity, similarityThreshold, l2Normalise } from '@/lib/faces'
 import { analyseFaces, modelsPresent } from '@/lib/face-model'
 
 let payload: Payload
 const password = 'geheim123'
 let memberEmail: string
 let kuratorEmail: string
+let adminEmail: string
+// Task 3 review carry-over: every photo created in this suite (directly via payload.create, not
+// through the upload REST endpoint) leaves a file on disk plus, once the faces queue runs, one or
+// more face-suggestions rows. Tracked here the same way tests/int/heic.int.test.ts tracks its own
+// REST-created photos, and cleaned up in afterAll — face-suggestions rows cascade-delete with
+// their photo (photo_id FK is ON DELETE cascade, see the face_suggestions migration), so deleting
+// the photo is sufficient.
+const createdPhotoIds: (string | number)[] = []
 
 beforeAll(async () => {
   payload = await getPayload({ config: await config })
   const stamp = Date.now()
   memberEmail = `face-m${stamp}@example.com`
   kuratorEmail = `face-k${stamp}@example.com`
+  adminEmail = `face-a${stamp}@example.com`
   await payload.create({
     collection: 'users',
     data: { name: 'Face Mitglied', email: memberEmail, password, role: 'mitglied' },
@@ -40,6 +49,32 @@ beforeAll(async () => {
     data: { name: 'Face Kurator', email: kuratorEmail, password, role: 'kurator' },
     overrideAccess: true,
   })
+  await payload.create({
+    collection: 'users',
+    data: { name: 'Face Admin', email: adminEmail, password, role: 'admin' },
+    overrideAccess: true,
+  })
+})
+
+afterAll(async () => {
+  if (createdPhotoIds.length) {
+    // Delete face-suggestions rows explicitly rather than relying on the photos->face_suggestions
+    // FK's ON DELETE cascade: that cascade is real in the *migrated* schema (see the
+    // face_suggestions migration), but Payload's dev-mode schema push — which every `pnpm dev`
+    // startup runs, including the one this int suite's HTTP calls depend on — reconciles against
+    // its own generated snapshot, not the hand-edited migration SQL, and that snapshot still says
+    // `set null` (a known, deliberately-accepted drift documented on Task 2: fixing the snapshot
+    // to say `cascade` would make the drift-check CI step itself flag a false difference). Under
+    // that reverted FK, hard-deleting a photo with any face-suggestions row would try to null out
+    // `photo_id`, which is NOT NULL, aborting the delete's transaction. Deleting the children
+    // first sidesteps the question of which ON DELETE behaviour happens to be live.
+    await payload.delete({
+      collection: 'face-suggestions',
+      where: { photo: { in: createdPhotoIds } },
+      overrideAccess: true,
+    })
+    await payload.delete({ collection: 'photos', where: { id: { in: createdPhotoIds } }, overrideAccess: true })
+  }
 })
 
 export async function loginCookie(email: string): Promise<string> {
@@ -53,6 +88,11 @@ export async function loginCookie(email: string): Promise<string> {
 }
 
 describe('face-suggestions access', () => {
+  it('an anonymous request cannot list face suggestions', async () => {
+    const res = await fetch('http://localhost:3000/api/face-suggestions')
+    expect(res.status).toBe(403)
+  })
+
   it('a mitglied cannot list face suggestions', async () => {
     const cookie = await loginCookie(memberEmail)
     const res = await fetch('http://localhost:3000/api/face-suggestions', { headers: { cookie } })
@@ -65,13 +105,14 @@ describe('face-suggestions access', () => {
     expect(res.status).toBe(200)
   })
 
-  it('the embedding never appears in an API response, even for a kurator', async () => {
+  it('the embedding never appears in an API response, for a kurator or an admin, over REST or GraphQL', async () => {
     const photo = await payload.create({
       collection: 'photos',
       data: { caption: 'Zugriffstest', datePrecision: 'unknown', _status: 'published' },
       filePath: 'tests/fixtures/gesicht-a.jpg',
       overrideAccess: true,
     })
+    createdPhotoIds.push(photo.id)
     await payload.create({
       collection: 'face-suggestions',
       data: {
@@ -82,14 +123,43 @@ describe('face-suggestions access', () => {
       },
       overrideAccess: true,
     })
+
+    for (const email of [kuratorEmail, adminEmail]) {
+      const cookie = await loginCookie(email)
+      const res = await fetch(`http://localhost:3000/api/face-suggestions?where[photo][equals]=${photo.id}`, {
+        headers: { cookie },
+      })
+      expect(res.status).toBe(200)
+      const json = (await res.json()) as { docs: Record<string, unknown>[] }
+      expect(json.docs.length).toBe(1)
+      expect(json.docs[0].embedding).toBeUndefined()
+    }
+
+    // Same field-level lock, exercised over GraphQL rather than REST — a separate code path
+    // (fields/hooks/afterRead) that a REST-only assertion wouldn't catch a regression in.
+    // Payload derives the GraphQL query field name from the collection slug (formatNames in
+    // payload/dist/utilities/formatLabels.js): 'face-suggestions' -> plural 'FaceSuggestions'.
     const cookie = await loginCookie(kuratorEmail)
-    const res = await fetch(`http://localhost:3000/api/face-suggestions?where[photo][equals]=${photo.id}`, {
-      headers: { cookie },
+    const res = await fetch('http://localhost:3000/api/graphql', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({
+        query: `query {
+          FaceSuggestions(where: { photo: { equals: ${JSON.stringify(String(photo.id))} } }) {
+            docs { id embedding }
+          }
+        }`,
+      }),
     })
     expect(res.status).toBe(200)
-    const json = (await res.json()) as { docs: Record<string, unknown>[] }
-    expect(json.docs.length).toBe(1)
-    expect(json.docs[0].embedding).toBeUndefined()
+    const json = (await res.json()) as {
+      data?: { FaceSuggestions?: { docs: { id: string | number; embedding: unknown }[] } }
+      errors?: unknown
+    }
+    expect(json.errors, JSON.stringify(json.errors)).toBeUndefined()
+    const docs = json.data?.FaceSuggestions?.docs ?? []
+    expect(docs.length).toBe(1)
+    expect(docs[0].embedding).toBeNull()
   })
 })
 
@@ -115,5 +185,87 @@ describe.skipIf(!modelsPresent())('analyseFaces on real fixtures', () => {
     expect(samePerson).toBeGreaterThan(threshold)
     expect(differentPerson).toBeLessThan(threshold)
     expect(samePerson).toBeGreaterThan(differentPerson)
+  })
+})
+
+async function runFacesQueue(): Promise<void> {
+  await payload.jobs.run({ queue: 'faces', overrideAccess: true })
+}
+
+async function suggestionsFor(photoId: string | number) {
+  const res = await payload.find({
+    collection: 'face-suggestions',
+    where: { photo: { equals: photoId } },
+    overrideAccess: true,
+    pagination: false,
+    depth: 0,
+  })
+  return res.docs
+}
+
+describe('detection runs on publish, not on draft', () => {
+  it('creates no suggestions for a draft', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'Entwurf', datePrecision: 'unknown', _status: 'draft' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    expect(await suggestionsFor(photo.id)).toHaveLength(0)
+  })
+
+  it('creates a suggestion with a 512-d embedding when the photo is published', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'Veröffentlicht', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const docs = await suggestionsFor(photo.id)
+    expect(docs.length).toBeGreaterThanOrEqual(1)
+    const [s] = docs
+    expect(s.status).toBe('offen')
+    expect(Array.isArray(s.embedding)).toBe(true)
+    expect((s.embedding as number[]).length).toBe(512)
+    for (const v of [s.boxXMin, s.boxYMin, s.boxXMax, s.boxYMax]) {
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(1)
+    }
+    expect(s.boxXMax).toBeGreaterThan(s.boxXMin)
+  })
+})
+
+// THE acceptance test for keypoint alignment. A plain box crop instead of the 5-point ArcFace
+// alignment still produces plausible-looking 512-d vectors — it just makes them useless for
+// matching. Nothing else in this suite would catch that; this does.
+describe('embeddings identify the same person across photos', () => {
+  it('scores same-person higher than different-person, and clears the default threshold', async () => {
+    const mk = async (fixture: string) => {
+      const photo = await payload.create({
+        collection: 'photos',
+        data: { caption: fixture, datePrecision: 'unknown', _status: 'published' },
+        filePath: `tests/fixtures/${fixture}`,
+        overrideAccess: true,
+      })
+      createdPhotoIds.push(photo.id)
+      await runFacesQueue()
+      const docs = await suggestionsFor(photo.id)
+      expect(docs.length).toBeGreaterThanOrEqual(1)
+      const biggest = docs.sort(
+        (x, y) => (y.boxXMax - y.boxXMin) * (y.boxYMax - y.boxYMin) - (x.boxXMax - x.boxXMin) * (x.boxYMax - x.boxYMin),
+      )[0]
+      return l2Normalise(biggest.embedding as number[])
+    }
+    const a = await mk('gesicht-a.jpg')
+    const b = await mk('gesicht-b.jpg')
+    const c = await mk('gesicht-c.jpg')
+    const same = a.reduce((acc, v, i) => acc + v * b[i], 0)
+    const different = a.reduce((acc, v, i) => acc + v * c[i], 0)
+    expect(same).toBeGreaterThan(different)
+    expect(same).toBeGreaterThan(0.4)
   })
 })

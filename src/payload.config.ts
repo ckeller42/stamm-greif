@@ -21,6 +21,7 @@ import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
 import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 import { purgePapierkorbTask } from '@/jobs/purgePapierkorb'
+import { detectFacesTask } from '@/jobs/detectFaces'
 import { isAdmin } from '@/access/roles'
 
 // Fix round 1 (H2): every jobs.access.* callback (run/queue/cancel) has the same `{ req }` arg
@@ -72,7 +73,7 @@ const configPromise = buildConfig({
   // does call getPayload()) is intentional, not an oversight — an idle daily cron with nothing
   // due to purge is a no-op.
   jobs: {
-    tasks: [purgePapierkorbTask],
+    tasks: [purgePapierkorbTask, detectFacesTask],
     // Fix round 1 (M4): `autoRun` only ever RUNS jobs already sitting in the queue — it does
     // not enqueue new ones (that's `schedule`, above). A daily `autoRun` cron here was wrong on
     // two counts: (1) it enqueues-then-immediately-runs on the same tick only by coincidence of
@@ -83,7 +84,14 @@ const configPromise = buildConfig({
     // sits queued and unrun for a full extra day. Running the (cheap — no-op unless something's
     // actually due) autoRun check every 15 minutes instead means a missed tick costs minutes,
     // not a day, while the daily cadence itself still lives solely in the task's own `schedule`.
-    autoRun: [{ cron: '*/15 * * * *', queue: 'default' }],
+    //
+    // P2.3: the `faces` queue runs every minute (suggestions should appear while the kurator is
+    // still at the screen) but with a `limit`, so the one-off full backfill (Task 7) drains at a
+    // fixed, self-throttling rate instead of saturating the box.
+    autoRun: [
+      { cron: '*/15 * * * *', queue: 'default' },
+      { cron: '* * * * *', queue: 'faces', limit: 10 },
+    ],
     // Fix round 1 (H2): with no `access` block, every jobs.access.* callback defaults to
     // Payload's `defaultAccess` (`Boolean(user)` — auth/defaultAccess.js) or, on some call
     // sites, an unconditional `() => true` fallback when `access.<op>` itself is undefined

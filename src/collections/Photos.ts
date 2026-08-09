@@ -14,7 +14,9 @@ import exifReader from 'exif-reader'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
 import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/lib/exif-fill'
+import { facesEnabled } from '@/lib/faces'
 import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
+import { enqueueDetectFaces } from '@/jobs/detectFaces'
 
 // Spec P2.2: two same-motif scans/re-exports of one slide produce dHashes that differ only in a
 // handful of bits (compression noise, minor recrop) — chosen empirically-plausible per the
@@ -438,6 +440,30 @@ export const Photos: CollectionConfig = {
     beforeOperation: [extractExifOnUpload, convertHeicToJpeg, computePhashOnUpload],
     beforeDelete: [captureDuplicateReferencesBeforeDelete],
     afterDelete: [clearDuplicateFlagsAfterDelete],
+    // P2.3: face detection runs on the draft→published transition, never on a draft. Member
+    // uploads land as drafts and a kurator may delete them unpublished; computing and STORING
+    // biometric templates for photos that get thrown away is processing we can simply not do.
+    // Also covers a replaced file on an already-published photo. Never throws: a failed enqueue
+    // must not fail the publish.
+    afterChange: [
+      async ({ doc, previousDoc, req, operation }) => {
+        if (!facesEnabled()) return
+        const nowPublished = doc._status === 'published'
+        const wasPublished = operation === 'update' && previousDoc?._status === 'published'
+        const fileChanged = wasPublished && doc.filename !== previousDoc?.filename
+        if (!nowPublished || (wasPublished && !fileChanged)) return
+        if (doc.hasHiddenPerson || doc.deletedAt) return
+        try {
+          await enqueueDetectFaces(req, doc.id)
+        } catch (err) {
+          req.payload.logger.error({
+            msg: 'face-detect-enqueue-failed',
+            photoId: doc.id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      },
+    ],
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
         if (operation === 'create' && req.user) {
