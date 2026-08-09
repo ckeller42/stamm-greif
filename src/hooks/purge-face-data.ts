@@ -39,7 +39,45 @@ export async function purgeFaceDataForPerson(
         `${personId} failed to delete: ${result.errors.map((e) => e.message).join('; ')}`,
     )
   }
-  const deleted = result.docs.length
+  let deleted = result.docs.length
+
+  // Final review, M3: `suggestedPerson` is only correct when a kurator confirmed the RIGHT face
+  // to the RIGHT person. It can be wrong two ways that the delete above misses entirely: (a) a
+  // misidentification — this person's actual face confirmed as someone ELSE, so the row that
+  // holds their biometric template names a different `suggestedPerson` — and (b) a still-`offen`
+  // or never-reviewed row for their face that was never attributed to anyone at all. Either way,
+  // this person being tagged in `photos.people` on a given photo (however that tag was made —
+  // through a confirmed suggestion OR a direct admin edit of the field) is the signal that ANY
+  // face-suggestions row on that exact photo could be theirs. The conservative, GDPR-safe move on
+  // consent withdrawal is to purge every face-suggestions row on every photo this person is
+  // tagged on, not just the ones correctly attributed to them — accepting, deliberately, that
+  // this can also remove another (still-consenting) person's correctly-confirmed row on the SAME
+  // photo as unavoidable collateral of not being able to tell the rows apart after the fact.
+  const taggedPhotos = await req.payload.find({
+    collection: 'photos',
+    where: { people: { in: [personId] } },
+    limit: 0,
+    pagination: false,
+    overrideAccess: true,
+    depth: 0,
+    req,
+  })
+  if (taggedPhotos.docs.length > 0) {
+    const byPhoto = await req.payload.delete({
+      collection: 'face-suggestions',
+      where: { photo: { in: taggedPhotos.docs.map((p) => p.id) } },
+      overrideAccess: true,
+      req,
+    })
+    if (byPhoto.errors.length > 0) {
+      throw new Error(
+        `face-data-purge-incomplete: ${byPhoto.errors.length} face-suggestions row(s) on photos ` +
+          `tagging person ${personId} failed to delete: ${byPhoto.errors.map((e) => e.message).join('; ')}`,
+      )
+    }
+    deleted += byPhoto.docs.length
+  }
+
   if (deleted > 0) {
     req.payload.logger.info({ msg: 'face-data-purged', personId, deleted })
   }

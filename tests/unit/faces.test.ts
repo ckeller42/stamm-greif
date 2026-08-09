@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   l2Normalise,
   cosineSimilarity,
@@ -11,7 +11,93 @@ import {
   applySimilarity,
   bestMatchPerPerson,
   ARCFACE_TEMPLATE_112,
+  facesEnabled,
+  modelsDir,
+  similarityThreshold,
+  detThreshold,
 } from '@/lib/faces'
+
+// Final review, H1: these four env-reading functions were the only uncovered lines in this file
+// — and the coupled trap the review flagged (`Number('')` is `0`, not `NaN`) was invisible
+// without a test exercising the blank-string case specifically. `vi.unstubAllEnvs()` in afterEach
+// keeps each case's env stub from leaking into the next.
+describe('facesEnabled / modelsDir / similarityThreshold / detThreshold (env parsing)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  describe('facesEnabled', () => {
+    it('is true when unset', () => {
+      vi.stubEnv('FACE_DETECTION_ENABLED', undefined)
+      expect(facesEnabled()).toBe(true)
+    })
+    it('is false only for the literal string "false"', () => {
+      vi.stubEnv('FACE_DETECTION_ENABLED', 'false')
+      expect(facesEnabled()).toBe(false)
+    })
+    it('is true for anything else, including a blank string', () => {
+      vi.stubEnv('FACE_DETECTION_ENABLED', '')
+      expect(facesEnabled()).toBe(true)
+    })
+  })
+
+  describe('modelsDir', () => {
+    it('falls back to models/faces when unset', () => {
+      vi.stubEnv('FACE_MODELS_DIR', undefined)
+      expect(modelsDir()).toBe('models/faces')
+    })
+    it('falls back to models/faces when blank', () => {
+      vi.stubEnv('FACE_MODELS_DIR', '')
+      expect(modelsDir()).toBe('models/faces')
+    })
+    it('uses the env value when set', () => {
+      vi.stubEnv('FACE_MODELS_DIR', '/custom/models')
+      expect(modelsDir()).toBe('/custom/models')
+    })
+  })
+
+  describe('similarityThreshold', () => {
+    it('defaults to 0.4 when unset', () => {
+      vi.stubEnv('FACE_SIMILARITY_THRESHOLD', undefined)
+      expect(similarityThreshold()).toBe(0.4)
+    })
+    it('defaults to 0.4 for a blank string, not 0 (the coupled trap: Number("") === 0)', () => {
+      vi.stubEnv('FACE_SIMILARITY_THRESHOLD', '')
+      expect(similarityThreshold()).toBe(0.4)
+    })
+    it('defaults to 0.4 for a whitespace-only string', () => {
+      vi.stubEnv('FACE_SIMILARITY_THRESHOLD', '   ')
+      expect(similarityThreshold()).toBe(0.4)
+    })
+    it('parses a valid numeric override', () => {
+      vi.stubEnv('FACE_SIMILARITY_THRESHOLD', '0.55')
+      expect(similarityThreshold()).toBe(0.55)
+    })
+    it('defaults to 0.4 for a non-numeric value', () => {
+      vi.stubEnv('FACE_SIMILARITY_THRESHOLD', 'garbage')
+      expect(similarityThreshold()).toBe(0.4)
+    })
+  })
+
+  describe('detThreshold', () => {
+    it('defaults to 0.5 when unset', () => {
+      vi.stubEnv('FACE_DET_THRESHOLD', undefined)
+      expect(detThreshold()).toBe(0.5)
+    })
+    it('defaults to 0.5 for a blank string, not 0', () => {
+      vi.stubEnv('FACE_DET_THRESHOLD', '')
+      expect(detThreshold()).toBe(0.5)
+    })
+    it('parses a valid numeric override', () => {
+      vi.stubEnv('FACE_DET_THRESHOLD', '0.55')
+      expect(detThreshold()).toBe(0.55)
+    })
+    it('defaults to 0.5 for a non-numeric value', () => {
+      vi.stubEnv('FACE_DET_THRESHOLD', 'garbage')
+      expect(detThreshold()).toBe(0.5)
+    })
+  })
+})
 
 describe('l2Normalise', () => {
   it('makes the vector unit length', () => {

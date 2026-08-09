@@ -36,15 +36,28 @@ export function modelsDir(): string {
  * to recompute per population — so this is a starting point to tune on real data, not a constant
  * of nature. Env-tunable precisely so it can be walked in without a deploy. A false positive
  * costs a kurator one click; a false negative costs a suggestion that never appears.
+ *
+ * Final review, H1 (coupled trap): `Number('')` is `0`, not `NaN` — `Number.isFinite(0)` is
+ * true, so a blank-but-defined env var (e.g. a compose file wiring `FACE_SIMILARITY_THRESHOLD:
+ * ${FACE_SIMILARITY_THRESHOLD:-}` with nothing on the right, or a `.env` line with a trailing `=`
+ * and nothing after it) used to silently set the threshold to 0 — matching every face against
+ * every confirmed person at ANY similarity, the exact opposite of "unset means use the default."
+ * Trimming and explicitly checking for blank BEFORE calling `Number()` closes that: only a
+ * non-empty, numeric string can ever override the default now.
  */
 export function similarityThreshold(): number {
-  const v = Number(process.env.FACE_SIMILARITY_THRESHOLD)
+  const raw = process.env.FACE_SIMILARITY_THRESHOLD?.trim()
+  if (!raw) return 0.4
+  const v = Number(raw)
   return Number.isFinite(v) ? v : 0.4
 }
 
-/** Minimum detector confidence for a box to be considered a face at all. */
+/** Minimum detector confidence for a box to be considered a face at all. Same blank-string trap
+ * and fix as {@link similarityThreshold} above. */
 export function detThreshold(): number {
-  const v = Number(process.env.FACE_DET_THRESHOLD)
+  const raw = process.env.FACE_DET_THRESHOLD?.trim()
+  if (!raw) return 0.5
+  const v = Number(raw)
   return Number.isFinite(v) ? v : 0.5
 }
 

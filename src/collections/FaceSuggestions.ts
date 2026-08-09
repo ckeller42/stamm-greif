@@ -38,6 +38,41 @@ async function removePersonFromPhoto(req: PayloadRequest, photoId: string | numb
   })
 }
 
+// Final review, M2: a photo can have MULTIPLE detected faces of the same person (e.g. a mirror,
+// a photo-of-a-photo, or simply two crops a kurator confirmed separately) — each gets its own
+// face-suggestions row, but `photos.people` only tags the person once. Un-confirming ONE such row
+// (via undo or a reject-after-confirm) must not untag the person from the photo while another
+// `bestaetigt` row still vouches for them there; the ORIGINAL unconditional
+// `removePersonFromPhoto` call (both here and in `zuruecksetzen` before this fix) would do exactly
+// that. `excludeSuggestionId` is the row being un-confirmed itself, so it doesn't count as its own
+// "other" witness.
+async function untagPersonIfNoOtherConfirmedRow(
+  req: PayloadRequest,
+  photoId: string | number,
+  personId: string | number,
+  excludeSuggestionId: string | number,
+) {
+  const otherConfirmed = await req.payload.find({
+    collection: 'face-suggestions',
+    where: {
+      and: [
+        { photo: { equals: photoId } },
+        { suggestedPerson: { equals: personId } },
+        { status: { equals: 'bestaetigt' } },
+        { id: { not_equals: excludeSuggestionId } },
+      ],
+    },
+    limit: 1,
+    pagination: false,
+    overrideAccess: true,
+    depth: 0,
+    req,
+  })
+  if (otherConfirmed.totalDocs === 0) {
+    await removePersonFromPhoto(req, photoId, personId)
+  }
+}
+
 // P2.3 face detection. One row per detected face. The row is created by the detectFaces job with
 // its embedding already computed, so confirming later performs no inference at all — it only
 // flips `status` and tags the person.
@@ -138,6 +173,28 @@ export const FaceSuggestions: CollectionConfig = {
       handler: async (req) => {
         if (!isModerator(req)) return Response.json({ error: 'Nicht erlaubt' }, { status: 403 })
         const id = req.routeParams?.id as string
+        // Final review, L8: the sibling endpoints (bestaetigen, zuruecksetzen) both check
+        // existence first and return the same `{ error: 'Nicht gefunden' }` 404 shape — this one
+        // didn't, so rejecting a nonexistent/already-deleted id fell straight through to
+        // Payload's own NotFound error instead, a differently-shaped response the frontend's
+        // shared error handling (FaceReviewForm's `body?.error` read) doesn't expect.
+        const suggestion = await req.payload
+          .findByID({ collection: 'face-suggestions', id, overrideAccess: true, depth: 0, req })
+          .catch(() => null)
+        if (!suggestion) return Response.json({ error: 'Nicht gefunden' }, { status: 404 })
+        // Final review, L8: rejecting a row that was previously `bestaetigt` (a kurator changing
+        // their mind via "Ablehnen" instead of "Rückgängig") used to leave the person tagged on
+        // the photo forever — only `zuruecksetzen` ever called removePersonFromPhoto. Mirrors that
+        // endpoint's own guarded untag (M2): don't remove the tag if another confirmed row on the
+        // same photo still names the same person.
+        if (suggestion.suggestedPerson) {
+          await untagPersonIfNoOtherConfirmedRow(
+            req,
+            suggestion.photo as string | number,
+            suggestion.suggestedPerson as string | number,
+            id,
+          )
+        }
         await req.payload.update({
           collection: 'face-suggestions',
           id,
@@ -166,11 +223,16 @@ export const FaceSuggestions: CollectionConfig = {
           .findByID({ collection: 'face-suggestions', id, overrideAccess: true, depth: 0, req })
           .catch(() => null)
         if (!suggestion) return Response.json({ error: 'Nicht gefunden' }, { status: 404 })
+        // Final review, M2: was an unconditional removePersonFromPhoto — wrong whenever a SECOND
+        // face on the same photo is also confirmed to this person (a mirror, a photo-of-a-photo,
+        // two separately-confirmed crops): undoing one row untagged the person even though
+        // another `bestaetigt` row still vouches for them on that exact photo.
         if (suggestion.suggestedPerson) {
-          await removePersonFromPhoto(
+          await untagPersonIfNoOtherConfirmedRow(
             req,
             suggestion.photo as string | number,
             suggestion.suggestedPerson as string | number,
+            id,
           )
         }
         await req.payload.update({

@@ -133,6 +133,21 @@ const configPromise = buildConfig({
       { cron: '*/15 * * * *', queue: 'default' },
       { cron: '* * * * *', queue: 'faces', limit: 10 },
     ],
+    // Final review, H2: `autoRun` ticks inside EVERY `getPayload()` process, including each of
+    // this int suite's own test files — there's no NODE_ENV/similar gate on it otherwise. The
+    // `faces` queue's once-a-minute tick collides with a LIVE `pnpm dev` server (started for the
+    // suite's own HTTP-driven tests) also ticking the same queue independently, both racing this
+    // suite's own explicit `payload.jobs.run()` calls — confirmed directly as the root cause of
+    // the int suite's flaky bare `const [row] = await suggestionsFor(...)` destructures
+    // (Task 6 round 2's report already traced a related symptom, a full Postgres deadlock, to
+    // this exact `autoRun`-vs-explicit-run collision). `jobs.shouldAutoRun` is Payload's own
+    // documented per-instance gate (queues/config/types/index.d.ts) — checked once per tick,
+    // async-capable, and doesn't touch the `autoRun` schedule array itself, so production and
+    // `pnpm dev` behavior are unchanged. Vitest sets `process.env.VITEST = 'true'` on every
+    // process it runs (verified directly), unambiguously distinct from `pnpm dev`'s ordinary
+    // `next dev` (no VITEST var at all) and the container's `NODE_ENV=production` — no test
+    // process should ever ALSO be draining a background cron behind its own back.
+    shouldAutoRun: () => process.env.VITEST !== 'true',
     // Fix round 1 (H2): with no `access` block, every jobs.access.* callback defaults to
     // Payload's `defaultAccess` (`Boolean(user)` — auth/defaultAccess.js) or, on some call
     // sites, an unconditional `() => true` fallback when `access.<op>` itself is undefined

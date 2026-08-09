@@ -44,7 +44,24 @@ export const People: CollectionConfig = {
     { name: 'name', type: 'text', required: true, label: 'Name' },
     { name: 'bio', type: 'textarea', label: 'Notizen / Biografie' },
     { name: 'birthYear', type: 'number', label: 'Geburtsjahr' },
-    { name: 'hidden', type: 'checkbox', defaultValue: false, label: 'Person verbergen (Einwilligung widerrufen)' },
+    {
+      name: 'hidden',
+      type: 'checkbox',
+      defaultValue: false,
+      label: 'Person verbergen (Einwilligung widerrufen)',
+      // Spec §7 ("Irreversibility... Stated in the admin-UI description on the `hidden` field, in
+      // `de.ts`, and in betrieb.md") + final review, M4: this checkbox is the trigger for
+      // purgeFaceDataForHiddenPerson (src/hooks/purge-face-data.ts) — the ONE place in the admin
+      // UI a kurator actually flips consent withdrawal, so the warning belongs right here, not
+      // only in docs nobody reads mid-click.
+      admin: {
+        description:
+          'Löscht beim Aktivieren SOFORT UND UNWIDERRUFLICH alle Gesichts-Vorschläge und ' +
+          '-Vorlagen (Embeddings) dieser Person — auch bereits bestätigte. Deaktivieren stellt ' +
+          'nichts davon wieder her: die Person wird bei künftigen Fotos wieder nur von Hand ' +
+          'markiert, bis ein neuer Vorschlag bestätigt wird.',
+      },
+    },
     { name: 'portrait', type: 'relationship', relationTo: 'photos', label: 'Porträtfoto' },
   ],
 }

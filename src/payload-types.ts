@@ -201,6 +201,9 @@ export interface Person {
   name: string;
   bio?: string | null;
   birthYear?: number | null;
+  /**
+   * Löscht beim Aktivieren SOFORT UND UNWIDERRUFLICH alle Gesichts-Vorschläge und -Vorlagen (Embeddings) dieser Person — auch bereits bestätigte. Deaktivieren stellt nichts davon wieder her: die Person wird bei künftigen Fotos wieder nur von Hand markiert, bis ein neuer Vorschlag bestätigt wird.
+   */
   hidden?: boolean | null;
   portrait?: (number | null) | Photo;
   updatedAt: string;
@@ -219,6 +222,9 @@ export interface Photo {
    */
   dateValue?: string | null;
   dateSortKey?: number | null;
+  /**
+   * Eine falsche Gesichts-Bestätigung wird über „Rückgängig" unter /gesichter korrigiert, nicht durch Entfernen einer Person hier — nur „Rückgängig" räumt auch die gespeicherte Gesichts-Vorlage (Embedding) auf.
+   */
   people?: (number | Person)[] | null;
   event?: (number | null) | Event;
   place?: (number | null) | Place;

@@ -8,15 +8,23 @@ type Props = {
   suggestionId: string
   defaultPersonId: string
   people: { id: string; name: string }[]
+  // Final review, M1: `/gesichter` only ever rendered `offen` rows, so `de.gesichter.undo`
+  // ("Rückgängig") existed as a string nobody could reach — the ONLY way betrieb.md's own
+  // documented correction path ("eine falsche Bestätigung wird über 'Rückgängig' korrigiert")
+  // could actually be followed was a direct, undocumented POST to the endpoint. `mode` switches
+  // this form between the full offen (choose person / bestätigen / ablehnen) controls and a
+  // bestaetigt row's single undo action — same component, so the busy/error/re-entrancy handling
+  // isn't duplicated.
+  mode?: 'bestaetigt' | 'offen'
 }
 
-export function FaceReviewForm({ suggestionId, defaultPersonId, people }: Props) {
+export function FaceReviewForm({ suggestionId, defaultPersonId, people, mode = 'offen' }: Props) {
   const router = useRouter()
   const [personId, setPersonId] = useState(defaultPersonId)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function act(action: 'bestaetigen' | 'ablehnen') {
+  async function act(action: 'ablehnen' | 'bestaetigen' | 'zuruecksetzen') {
     if (busy) return // re-entrancy guard, same as UploadForm's
     if (action === 'bestaetigen' && !personId) {
       setError(de.gesichter.needsPerson)
@@ -41,6 +49,17 @@ export function FaceReviewForm({ suggestionId, defaultPersonId, people }: Props)
     } finally {
       setBusy(false)
     }
+  }
+
+  if (mode === 'bestaetigt') {
+    return (
+      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+        <button type="button" onClick={() => act('zuruecksetzen')} disabled={busy}>
+          {busy ? de.gesichter.saving : de.gesichter.undo}
+        </button>
+        {error && <span role="alert">{error}</span>}
+      </div>
+    )
   }
 
   return (

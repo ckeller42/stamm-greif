@@ -19,6 +19,20 @@ services:
     environment:
       DATABASE_URI: postgres://archiv:${DB_PASSWORD}@db:5432/archiv
       PAYLOAD_SECRET: ${PAYLOAD_SECRET}
+      # Final review, H1: docs/betrieb.md's "Gesichtserkennung" section documents these three as
+      # the kill switch and the two tuning knobs (src/lib/faces.ts's facesEnabled/
+      # similarityThreshold/detThreshold) — but until now nothing actually wired them from the
+      # host's .env into this container, so setting them there did nothing at all; the app only
+      # ever saw its own baked-in defaults. `${VAR:-default}` (Compose's own substitution syntax,
+      # same form the rest of this file already relies on for DB_PASSWORD/PAYLOAD_SECRET) means an
+      # operator who never sets these still gets the documented defaults, and Compose substitutes
+      # the default for BOTH an unset var and one explicitly set to an empty string — so this is
+      # never the source of the blank-string trap the parsers in faces.ts now also guard against
+      # directly (defense in depth: a `.env` line or a differently-orchestrated deploy that sets
+      # the var to `''` some other way still can't silently zero out the threshold).
+      FACE_DETECTION_ENABLED: ${FACE_DETECTION_ENABLED:-true}
+      FACE_SIMILARITY_THRESHOLD: ${FACE_SIMILARITY_THRESHOLD:-0.40}
+      FACE_DET_THRESHOLD: ${FACE_DET_THRESHOLD:-0.5}
     volumes:
       # Reality check (Task 14): Photos has no upload.staticDir override, so Payload uses its
       # default (the collection slug, "photos") resolved relative to process.cwd() — /app in

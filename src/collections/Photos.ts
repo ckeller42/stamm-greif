@@ -15,6 +15,7 @@ import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
 import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/lib/exif-fill'
 import { facesEnabled } from '@/lib/faces'
+import { modelsPresent } from '@/lib/face-model'
 import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
 import { enqueueDetectFaces } from '@/jobs/detectFaces'
 
@@ -484,6 +485,13 @@ export const Photos: CollectionConfig = {
     afterChange: [
       async ({ doc, previousDoc, req, operation }) => {
         if (!facesEnabled()) return
+        // Final review, M5: spec §5's degradation story ("FACE_MODELS_DIR missing/incomplete →
+        // nothing is enqueued") was only half-true before this — `detectFacesHandler` itself
+        // already no-ops when `!modelsPresent()`, but nothing stopped the ENQUEUE from happening
+        // first, leaving a dead `payload_jobs` row (queued, run, produced nothing) behind for
+        // every publish while a model is missing/incomplete. Checking here too means a degraded
+        // deployment doesn't churn the jobs table for work it already knows will be a no-op.
+        if (!modelsPresent()) return
         const nowPublished = doc._status === 'published'
         const wasPublished = operation === 'update' && previousDoc?._status === 'published'
         const fileChanged = wasPublished && doc.filename !== previousDoc?.filename
@@ -544,7 +552,23 @@ export const Photos: CollectionConfig = {
   fields: [
     { name: 'caption', type: 'text', label: 'Beschreibung' },
     ...fuzzyDateFields(),
-    { name: 'people', type: 'relationship', relationTo: 'people', hasMany: true, label: 'Personen' },
+    {
+      name: 'people',
+      type: 'relationship',
+      relationTo: 'people',
+      hasMany: true,
+      label: 'Personen',
+      // Spec §7 ("Untagging is not a deletion path... the `photos.people` field description
+      // points at it") + final review, M4: removing a person here does NOT delete the underlying
+      // face-suggestions row or its embedding — it just edits this list. Fixing a wrong
+      // confirmation belongs on /gesichter ("Rückgängig"), which does clean up the biometric data.
+      admin: {
+        description:
+          'Eine falsche Gesichts-Bestätigung wird über „Rückgängig" unter /gesichter korrigiert, ' +
+          'nicht durch Entfernen einer Person hier — nur „Rückgängig" räumt auch die gespeicherte ' +
+          'Gesichts-Vorlage (Embedding) auf.',
+      },
+    },
     { name: 'event', type: 'relationship', relationTo: 'events', label: 'Ereignis' },
     { name: 'place', type: 'relationship', relationTo: 'places', label: 'Ort' },
     { name: 'tags', type: 'relationship', relationTo: 'tags', hasMany: true, label: 'Schlagwörter' },

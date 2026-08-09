@@ -12,10 +12,11 @@
 // needs no database for that block, but it lives in tests/int (not tests/unit) because the model
 // files are the constraint, not the DB — `pnpm test:int` is the one script that fetches them
 // first (package.json's test:int runs scripts/fetch-face-models.sh before vitest).
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { getPayload, type Payload } from 'payload'
 import config from '@payload-config'
-import { readFile } from 'node:fs/promises'
+import { readFile, mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { cosineSimilarity, similarityThreshold, l2Normalise } from '@/lib/faces'
 import { analyseFaces, modelsPresent } from '@/lib/face-model'
@@ -32,9 +33,12 @@ let adminEmail: string
 // their photo (photo_id FK is ON DELETE cascade, see the face_suggestions migration), so deleting
 // the photo is sufficient.
 const createdPhotoIds: (string | number)[] = []
-// People created directly (not via a photo/suggestion flow) that this suite must clean up itself
-// — Task 6 review carry-over: the ForceFail and BulkEdit tests below create a person but never
-// confirm/hide/delete it, so without this they leak a row per CI run.
+// Final review, L1/L2: EVERY person created anywhere in this suite is tracked here and cleaned up
+// in afterAll, including ones the test itself hides or otherwise mutates — hiding/purging a
+// person's face data (People's own afterChange hook) never deletes the PERSON row itself, so
+// without this every person-creating test leaks a row per CI run. (The previous version of this
+// comment only mentioned two specific tests by name; that stopped being true the moment a third
+// test started creating a person, and by the time of this review most of them already did.)
 const createdPersonIds: (string | number)[] = []
 
 beforeAll(async () => {
@@ -229,6 +233,32 @@ async function suggestionsFor(photoId: string | number) {
   return res.docs
 }
 
+// Final review, H2: every call site below used to do `const [row] = await suggestionsFor(...)`
+// straight after `runFacesQueue()` — a bare destructure that's `undefined` on the very first row
+// whenever nothing showed up yet, which then fails several lines later with a confusing "Cannot
+// read properties of undefined" instead of pointing at the actual problem. `runFacesQueue()`
+// itself already drains the `faces` queue fully (loops to `noJobsRemaining`), so by the time this
+// runs the row should already exist — this is a short bounded RETRY on top of that (not the
+// primary defense: `shouldAutoRun` in payload.config.ts is what actually stops a concurrent
+// `pnpm dev` autoRun tick from racing this suite's own explicit runs) with an assertion that
+// fails LOUDLY, at the actual point of the problem, if it still doesn't.
+async function firstSuggestionFor(
+  photoId: string | number,
+  attempts = 5,
+  delayMs = 200,
+): Promise<Awaited<ReturnType<typeof suggestionsFor>>[number]> {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const docs = await suggestionsFor(photoId)
+    if (docs.length > 0) return docs[0]
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs))
+  }
+  throw new Error(
+    `firstSuggestionFor: no face-suggestions row appeared for photo ${photoId} after ` +
+      `${attempts} attempts (${(attempts - 1) * delayMs}ms) — runFacesQueue() should already ` +
+      'have drained the faces queue by this point.',
+  )
+}
+
 describe('detection runs on publish, not on draft', () => {
   it('creates no suggestions for a draft', async () => {
     const photo = await payload.create({
@@ -349,10 +379,11 @@ describe('confirm / reject / undo', () => {
     }
   })
 
-  it('confirming tags the person on the photo; undoing removes the tag again', async () => {
+  it('confirming tags the person, indexes the row end to end, and undo removes the tag again', async () => {
     const person = await payload.create({
       collection: 'people', data: { name: `Bestätigt ${Date.now()}` }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const photo = await payload.create({
       collection: 'photos',
       data: { caption: 'bestätigen', datePrecision: 'unknown', _status: 'published' },
@@ -361,7 +392,7 @@ describe('confirm / reject / undo', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
     const cookie = await loginCookie(kuratorEmail)
 
     const ok = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/bestaetigen`, {
@@ -372,6 +403,35 @@ describe('confirm / reject / undo', () => {
     expect(ok.status).toBe(200)
     let after = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true, depth: 0 })
     expect((after.people ?? []).map(String)).toContain(String(person.id))
+
+    // Final review, M6: the endpoint's own effect on the row itself — not just the photo tag —
+    // was never asserted anywhere in this file.
+    const confirmedRow = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0,
+    })
+    expect(confirmedRow.status).toBe('bestaetigt')
+    expect(String(confirmedRow.suggestedPerson)).toBe(String(person.id))
+    expect(confirmedRow.confirmedBy).toBeTruthy()
+    expect(confirmedRow.confirmedAt).toBeTruthy()
+    expect(Array.isArray(confirmedRow.embedding)).toBe(true)
+    expect((confirmedRow.embedding as number[]).length).toBe(512)
+
+    // Final review, M6: the endpoint→index path end to end — this confirmed row is what
+    // `bestMatchPerPerson` draws its index from (src/jobs/detectFaces.ts), so a SECOND photo of
+    // the same person (gesicht-b.jpg — same person as gesicht-a.jpg, see this file's own
+    // "embeddings identify the same person" test) should now come back suggesting them
+    // automatically, without ever going through /gesichter for this second photo.
+    const second = await payload.create({
+      collection: 'photos',
+      data: { caption: 'bestätigen-zweites', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-b.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(second.id)
+    await runFacesQueue()
+    const secondRows = await suggestionsFor(second.id)
+    const matched = secondRows.find((r) => String(r.suggestedPerson) === String(person.id))
+    expect(matched).toBeDefined()
 
     const undo = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/zuruecksetzen`, {
       method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}',
@@ -390,7 +450,7 @@ describe('confirm / reject / undo', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
     const cookie = await loginCookie(kuratorEmail)
     const res = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/ablehnen`, {
       method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}',
@@ -407,6 +467,7 @@ describe('confirm / reject / undo', () => {
     const person = await payload.create({
       collection: 'people', data: { name: `Verborgen ${Date.now()}`, hidden: true }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const photo = await payload.create({
       collection: 'photos',
       data: { caption: 'verborgen', datePrecision: 'unknown', _status: 'published' },
@@ -415,7 +476,7 @@ describe('confirm / reject / undo', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
     const cookie = await loginCookie(kuratorEmail)
     const res = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/bestaetigen`, {
       method: 'POST',
@@ -433,6 +494,7 @@ describe('matching against confirmed faces', () => {
       data: { name: `Testperson ${Date.now()}` },
       overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const first = await payload.create({
       collection: 'photos',
       data: { caption: 'erstes', datePrecision: 'unknown', _status: 'published' },
@@ -441,7 +503,7 @@ describe('matching against confirmed faces', () => {
     })
     createdPhotoIds.push(first.id)
     await runFacesQueue()
-    const [firstRow] = await suggestionsFor(first.id)
+    const firstRow = await firstSuggestionFor(first.id)
     // No index yet, so nothing can be suggested on the very first photo of a person.
     expect(firstRow.suggestedPerson).toBeFalsy()
 
@@ -481,6 +543,7 @@ describe('matching against confirmed faces', () => {
       data: { name: `Widerrufen ${Date.now()}` },
       overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const first = await payload.create({
       collection: 'photos',
       data: { caption: 'widerrufen-erstes', datePrecision: 'unknown', _status: 'published' },
@@ -489,7 +552,7 @@ describe('matching against confirmed faces', () => {
     })
     createdPhotoIds.push(first.id)
     await runFacesQueue()
-    const [firstRow] = await suggestionsFor(first.id)
+    const firstRow = await firstSuggestionFor(first.id)
     await payload.update({
       collection: 'face-suggestions',
       id: firstRow.id,
@@ -520,6 +583,7 @@ describe('consent purge and delete cascade', () => {
     const person = await payload.create({
       collection: 'people', data: { name: `Purge ${Date.now()}` }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const photo = await payload.create({
       collection: 'photos',
       data: { caption: 'purge', datePrecision: 'unknown', _status: 'published' },
@@ -528,7 +592,7 @@ describe('consent purge and delete cascade', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
     await payload.update({
       collection: 'face-suggestions', id: row.id,
       data: { status: 'bestaetigt', suggestedPerson: person.id }, overrideAccess: true,
@@ -571,6 +635,7 @@ describe('consent purge and delete cascade', () => {
     const person = await payload.create({
       collection: 'people', data: { name: `Restore ${Date.now()}`, hidden: true }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const photo = await payload.create({
       collection: 'photos',
       data: { caption: 'restore', datePrecision: 'unknown', _status: 'published' },
@@ -579,7 +644,7 @@ describe('consent purge and delete cascade', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
     // simulate a restored backup: a row naming an already-hidden person
     await payload.update({
       collection: 'face-suggestions', id: row.id,
@@ -611,6 +676,7 @@ describe('consent purge and delete cascade', () => {
     const person = await payload.create({
       collection: 'people', data: { name: `HardDelete ${Date.now()}` }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const photo = await payload.create({
       collection: 'photos',
       data: { caption: 'hard-delete-purge', datePrecision: 'unknown', _status: 'published' },
@@ -619,7 +685,7 @@ describe('consent purge and delete cascade', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
     await payload.update({
       collection: 'face-suggestions', id: row.id,
       data: { status: 'bestaetigt', suggestedPerson: person.id }, overrideAccess: true,
@@ -742,6 +808,7 @@ describe('backfillFaces task', () => {
         data: { name: `Backfill-Hidden ${Date.now()}`, hidden: true },
         overrideAccess: true,
       })
+      createdPersonIds.push(person.id)
       const photo = await payload.create({
         collection: 'photos',
         data: {
@@ -793,7 +860,7 @@ describe('backfillFaces task', () => {
       })
       createdPhotoIds.push(photo.id)
       await runFacesQueue()
-      const [row] = await suggestionsFor(photo.id)
+      const row = await firstSuggestionFor(photo.id)
       await payload.update({
         collection: 'face-suggestions', id: row.id,
         data: { status: 'abgelehnt', embedding: null }, overrideAccess: true,
@@ -868,7 +935,7 @@ describe('180-day stale-offen sweep (purgePapierkorb)', () => {
     })
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
-    const [row] = await suggestionsFor(photo.id)
+    const row = await firstSuggestionFor(photo.id)
 
     const staleDetectedAt = new Date(Date.now() - 181 * 24 * 60 * 60 * 1000).toISOString()
     await payload.update({
@@ -910,6 +977,86 @@ describe('health reports face readiness without affecting status', () => {
     expect(res.status).toBe(200)
     const json = (await res.json()) as { status: string; faces: string }
     expect(json.status).toBe('ok')
-    expect(['aus', 'bereit', 'Modell fehlt']).toContain(json.faces)
+    // Final review, M5: `expect([...]).toContain(json.faces)` is tautological — `json.faces` can
+    // only ever BE one of those three literal values (the route's own return type), so this
+    // passed regardless of which one actually came back and could never catch a regression. The
+    // shared dev server this suite's HTTP tests run against always has real models fetched
+    // (`scripts/fetch-face-models.sh`, part of `pnpm test:int`) and `FACE_DETECTION_ENABLED`
+    // unset (defaults true) — the only value this can honestly be here is 'bereit'. The
+    // 'Modell fehlt' branch gets its own real coverage below, in a separate process with an
+    // empty models dir — the module-scope `facesCache` in the health route means that value can
+    // only ever be exercised from a process that never served a request before models went
+    // missing, not by mutating this shared server's env after the fact.
+    expect(json.faces).toBe('bereit')
+  })
+})
+
+// Final review, M5: spec §10's own testing section lists this exact case ("FACE_MODELS_DIR
+// pointed at an empty directory → nothing enqueued, publish unaffected, /api/health still 200
+// with faces: 'Modell fehlt'") — never implemented across Tasks 1–7.
+//
+// The "nothing enqueued" half needs no process trickery at all: modelsPresent()/modelsDir() read
+// process.env fresh on every call (no caching), so stubbing FACE_MODELS_DIR around a
+// payload.create() call in THIS process is exactly as real as doing it through a live HTTP
+// upload — Photos.ts's afterChange hook and detectFacesHandler's own guard both call
+// modelsPresent() at the moment they run, not at process boot.
+//
+// The health-route half genuinely needs a FRESH module instance: the route's own `facesCache` is
+// a module-scope variable, resolved once per module lifetime on first call and never rechecked
+// (src/app/api/health/route.ts's own comment explains why — it's polled on a short interval and
+// neither the env flag nor the model files change at runtime). This suite's shared dev server on
+// :3000 already served a health check earlier in this file with the real models present, so its
+// `facesCache` is permanently 'bereit' for the rest of that process's life — nothing done from
+// out here can reach into that process's memory and unresolve it. A first attempt at this test
+// spawned a genuinely separate `next dev` server on another port specifically to get a fresh
+// process; that turned out to be real, repeated operational trouble of its own (Next 16's
+// per-project dev-server lockfile rejecting a second instance, an absolute distDir silently
+// resolving INSIDE the repo via path.join instead of re-rooting, and orphaned `next-server`
+// grandchild processes outliving `proc.kill()` and leaking both processes and directories) — far
+// more fragility than the thing being tested is worth. `vi.resetModules()` gets the same
+// "genuinely fresh module, unresolved cache" property Node gives a new process, without needing
+// a new OS process at all: it clears vitest's module registry, so the next `import(...)` of the
+// route (and everything it transitively imports — payload, this app's config, etc.) re-evaluates
+// from scratch, with its own new `facesCache` starting at `undefined` again.
+describe('degradation: FACE_MODELS_DIR pointed at an empty directory', () => {
+  it('publish still succeeds, nothing is enqueued for it, and a fresh health check reports "Modell fehlt"', async () => {
+    const emptyModelsDir = await mkdtemp(path.join(os.tmpdir(), 'face-models-empty-'))
+    const previousModelsDir = process.env.FACE_MODELS_DIR
+    process.env.FACE_MODELS_DIR = emptyModelsDir
+    try {
+      const photo = await payload.create({
+        collection: 'photos',
+        data: { caption: 'degraded', datePrecision: 'unknown', _status: 'published' },
+        filePath: 'tests/fixtures/gesicht-a.jpg',
+        overrideAccess: true,
+      })
+      createdPhotoIds.push(photo.id)
+
+      // Nothing enqueued: Photos.ts's afterChange hook checks modelsPresent() before calling
+      // enqueueDetectFaces, so no detectFaces job should exist for this photo at all — not
+      // merely one that ran and no-opped.
+      const jobs = await payload.find({
+        collection: 'payload-jobs',
+        where: { taskSlug: { equals: 'detectFaces' } },
+        overrideAccess: true,
+        pagination: false,
+        depth: 0,
+      })
+      const enqueuedForThisPhoto = jobs.docs.filter(
+        (j) => (j.input as { photoId?: number } | null)?.photoId === photo.id,
+      )
+      expect(enqueuedForThisPhoto).toHaveLength(0)
+
+      vi.resetModules()
+      const { GET } = await import('@/app/api/health/route')
+      const res = await GET()
+      expect(res.status).toBe(200)
+      const health = (await res.json()) as { faces: string }
+      expect(health.faces).toBe('Modell fehlt')
+    } finally {
+      if (previousModelsDir === undefined) delete process.env.FACE_MODELS_DIR
+      else process.env.FACE_MODELS_DIR = previousModelsDir
+      await rm(emptyModelsDir, { recursive: true, force: true })
+    }
   })
 })

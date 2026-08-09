@@ -189,6 +189,12 @@ docker compose logs app | grep papierkorb-purge
 Ein Eintrag mit `"failedCount"` > 0 zeigt einzelne fehlgeschlagene Löschungen (z. B. Datei schon
 weg) — die zugehörigen Fehler stehen als separate `papierkorb-purge-errors`-Zeile direkt daneben.
 
+**Hinweis:** `payload_jobs`/`payload_jobs_log`-Zeilen werden nach einem erfolgreichen Lauf
+absichtlich NICHT automatisch gelöscht (`jobs.deleteJobOnComplete: false` in `payload.config.ts` —
+nötig, um einen sonst reproduzierbaren Postgres-Deadlock zwischen zwei gleichzeitig laufenden
+Job-Durchläufen auf derselben Queue zu vermeiden) — die Tabelle wächst unbegrenzt; es gibt aktuell
+keinen eigenen Aufräum-Job dafür.
+
 **Manuell anstoßen** (z. B. um nicht bis 04:00 Uhr zu warten): über die Payload Local API, etwa
 per `docker compose exec app node` mit einem kurzen Skript, das `payload.jobs.queue({ task:
 'purgePapierkorb', input: {} })` gefolgt von `payload.jobs.run()` aufruft — oder einfach bis zum
@@ -284,18 +290,31 @@ Datenschutz-Folgenabschätzung (DSFA) wird empfohlen.
 nicht-kommerzielle Forschungszwecke" zur Verfügung — das erfüllt ein Vereinsarchiv wie dieses.
 
 Die Gesichtsdaten liegen in derselben Datenbank wie alles andere und sind deshalb in den
-Sicherungen enthalten. Wird bei einer Person „verbergen" gesetzt, sind ihre Gesichtsdaten im
-laufenden Betrieb **sofort und endgültig weg** — in bereits erstellten Sicherungen bleiben sie
-aber, bis diese Sicherungen turnusmäßig überschrieben werden (30 Tage lokal wie ausgelagert).
-Danach sind sie auch dort verschwunden. **Nach jedem Restore einer älteren Sicherung muss
-„Gesichtsdaten aufräumen" laufen**, sonst leben die gelöschten Daten wieder (Schritt 5 der
-Restore-Anleitung oben, `reconcileHiddenFaceData`).
+Sicherungen enthalten. Wird bei einer Person „verbergen" gesetzt, sind im laufenden Betrieb
+**sofort weg**: jeder Vorschlag, der sie als `suggestedPerson` nennt (bestätigt oder abgelehnt),
+UND jeder weitere Vorschlag auf einem Foto, auf dem sie in „Personen" markiert ist — auch wenn
+dieser Vorschlag fälschlich einer anderen Person zugeordnet wurde (Verwechslung bei der
+Bestätigung). Eine Lücke bleibt unvermeidbar, weil sie algorithmisch nicht auflösbar ist: ein noch
+offener, nie bestätigter Vorschlag, dessen Gesicht tatsächlich diese Person zeigt, den aber noch
+niemand ihr zugeordnet und sie auch sonst nirgends auf diesem Foto markiert hat, kann das System
+nicht automatisch mit ihr verknüpfen — er verschwindet erst über den regulären Weg: „Ablehnen",
+die 180-Tage-Frist unten, oder (sobald ein Kurator ihn — richtig oder fälschlich — bestätigt) die
+Löschung beim nächsten „verbergen". In bereits erstellten Sicherungen bleiben gelöschte
+Gesichtsdaten davon unberührt, bis diese Sicherungen turnusmäßig überschrieben werden (30 Tage
+lokal wie ausgelagert). Danach sind sie auch dort verschwunden. **Nach jedem Restore einer älteren
+Sicherung muss „Gesichtsdaten aufräumen" laufen**, sonst leben die gelöschten Daten wieder (Schritt
+5 der Restore-Anleitung oben, `reconcileHiddenFaceData`).
 
 Ein paar bewusste Einschränkungen:
 
-- Eine falsche Bestätigung wird über **„Rückgängig"** unter `/gesichter` korrigiert, nicht durch
-  Entfernen der Markierung im Admin-Bereich — nur so wird auch die gespeicherte Gesichts-Vorlage
-  wieder gelöscht.
+- Eine falsche Bestätigung wird über **„Rückgängig"** unter `/gesichter` korrigiert: der Vorschlag
+  geht zurück auf „offen", und die Person wird — sofern kein anderer bestätigter Vorschlag auf
+  demselben Foto sie noch nennt — auch wieder von diesem Foto abgetaggt. Die gespeicherte
+  Gesichts-Vorlage (Embedding) bleibt dabei **erhalten**: das Gesicht ist ja weiterhin real und
+  könnte erneut zugeordnet werden. Sie verschwindet erst über „Ablehnen" (löscht die Vorlage
+  sofort) oder automatisch nach 180 Tagen, falls der Vorschlag offen bleibt (siehe unten) — nicht
+  durch bloßes Entfernen der Personen-Markierung im Admin-Bereich, das lässt Vorschlag und Vorlage
+  unangetastet.
 - „Rückgängig" auf dem einzigen bestätigten Gesicht einer Person nimmt diese Person wieder aus dem
   Abgleich heraus — sie erscheint dann bei künftigen Fotos nicht mehr als Vorschlag, bis erneut ein
   Gesicht von ihr bestätigt wird.

@@ -29,8 +29,18 @@ export const de = {
     confirm: 'Bestätigen',
     reject: 'Ablehnen',
     undo: 'Rückgängig',
+    // Final review, M1: heading for the bestätigt list rendered alongside the offen queue on
+    // /gesichter — the only place „Rückgängig" is actually reachable now.
+    confirmedTitle: 'Bestätigte Gesichter',
+    confirmedEmpty: 'Keine bestätigten Gesichter.',
+    confirmedAs: 'Bestätigt als',
     saving: 'speichert',
     error: 'Das hat nicht geklappt — bitte erneut versuchen.',
     needsPerson: 'Bitte zuerst eine Person auswählen.',
+    // Spec §7 irreversibility warning, third of the three places it's stated (admin-UI
+    // description on People.hidden, here, betrieb.md) — final review, M4.
+    irreversibleNotice:
+      'Eine Person „verbergen" (unter Personen im Admin-Bereich) löscht deren Gesichtsdaten ' +
+      'sofort und unwiderruflich — auch bereits bestätigte Vorschläge.',
   },
 } as const
