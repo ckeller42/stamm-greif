@@ -187,6 +187,11 @@ Foto-Übersicht im Admin-Bereich den Verweis auf das vermutlich identische Foto 
 können selbst entscheiden, ob es sich tatsächlich um ein Duplikat handelt. Mitglieder sehen im
 Upload-Formular nur einen allgemeinen Hinweis, ohne Details zum vorhandenen Foto preiszugeben.
 
+Die Prüfung läuft nur beim **Erstellen** eines neuen Fotos, nicht bei späteren Bearbeitungen: wird
+ein fälschlich markiertes Foto erneut hochgeladen, um die Markierung loszuwerden, bleibt
+`duplicateOf`/`duplicateSuspected` des ursprünglichen Eintrags bestehen — die Markierung muss in
+diesem Fall manuell im Admin-Bereich entfernt werden.
+
 ## Monitoring
 
 - **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200
