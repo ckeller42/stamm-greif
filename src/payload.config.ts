@@ -3,7 +3,7 @@ import { lexicalEditor } from '@payloadcms/richtext-lexical'
 import { de } from '@payloadcms/translations/languages/de'
 import { en } from '@payloadcms/translations/languages/en'
 import path from 'path'
-import { buildConfig } from 'payload'
+import { buildConfig, type PayloadRequest } from 'payload'
 import { fileURLToPath } from 'url'
 import sharp from 'sharp'
 
@@ -20,6 +20,14 @@ import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
 import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 import { purgePapierkorbTask } from '@/jobs/purgePapierkorb'
+import { isAdmin } from '@/access/roles'
+
+// Fix round 1 (H2): every jobs.access.* callback (run/queue/cancel) has the same `{ req }` arg
+// shape, but a NARROWER return type (MaybePromise<boolean>) than the collection-level `Access`
+// type `isAdmin` already has (AccessResult = boolean | Where) — TS rejects passing `isAdmin`
+// directly here even though it never actually returns a `Where`. One small admin-only check,
+// reused for all three, avoids that mismatch without an `as` cast.
+const jobsAccessAdminOnly = ({ req }: { req: PayloadRequest }): boolean => req.user?.role === 'admin'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -29,7 +37,7 @@ if (!secret) {
   throw new Error('PAYLOAD_SECRET is required')
 }
 
-export default buildConfig({
+const configPromise = buildConfig({
   admin: {
     user: Users.slug,
     importMap: {
@@ -56,17 +64,48 @@ export default buildConfig({
   sharp,
   upload: { limits: { fileSize: 100 * 1024 * 1024 } }, // 100 MB (global constraint)
   plugins: [],
-  // 30-day Papierkorb auto-purge (spec §5). purgePapierkorbTask's own `schedule` is what
-  // enqueues the job daily at 04:00; `autoRun` here is the separate piece that actually runs
-  // whatever's sitting in the queue — see that task's top-of-file comment for the two-part
-  // reasoning (both verified against this version's payload.d.ts). Not gated behind
-  // NODE_ENV/similar: the int test (tests/int/papierkorb.int.test.ts) queues+runs the task
-  // directly rather than waiting on the cron, so this being always-on in every environment
-  // (including the vitest/int process, which does call getPayload()) is intentional, not an
-  // oversight — an idle daily cron with nothing due to purge is a no-op.
+  // 30-day Papierkorb auto-purge (spec §5). purgePapierkorbTask's own `schedule` (`0 4 * * *`)
+  // is what enqueues the job daily at 04:00. Not gated behind NODE_ENV/similar: the int test
+  // (tests/int/papierkorb.int.test.ts) queues+runs the task directly rather than waiting on the
+  // cron, so this being always-on in every environment (including the vitest/int process, which
+  // does call getPayload()) is intentional, not an oversight — an idle daily cron with nothing
+  // due to purge is a no-op.
   jobs: {
     tasks: [purgePapierkorbTask],
-    autoRun: [{ cron: '0 4 * * *', queue: 'default' }],
+    // Fix round 1 (M4): `autoRun` only ever RUNS jobs already sitting in the queue — it does
+    // not enqueue new ones (that's `schedule`, above). A daily `autoRun` cron here was wrong on
+    // two counts: (1) it enqueues-then-immediately-runs on the same tick only by coincidence of
+    // both being `0 4 * * *` — `enqueue` actually sets `waitUntil` to the task's *next* cron
+    // occurrence (i.e. tomorrow 04:00) relative to when it fires, so a daily autoRun tick and a
+    // daily schedule tick racing at the same instant is fragile, not by-design simultaneity; (2)
+    // if that one autoRun tick is ever missed (deploy/restart mid-tick, brief downtime), the job
+    // sits queued and unrun for a full extra day. Running the (cheap — no-op unless something's
+    // actually due) autoRun check every 15 minutes instead means a missed tick costs minutes,
+    // not a day, while the daily cadence itself still lives solely in the task's own `schedule`.
+    autoRun: [{ cron: '*/15 * * * *', queue: 'default' }],
+    // Fix round 1 (H2): with no `access` block, every jobs.access.* callback defaults to
+    // Payload's `defaultAccess` (`Boolean(user)` — auth/defaultAccess.js) or, on some call
+    // sites, an unconditional `() => true` fallback when `access.<op>` itself is undefined
+    // (verified directly: queues/localAPI.js's `queue`/`cancel` and queues/endpoints/run.js's
+    // `run` all do `jobsConfig.access?.<op> ?? (() => true)`) — i.e. ANY authenticated member,
+    // or possibly anyone at all, could hit `GET /api/payload-jobs/run` and force-run the purge
+    // (or any future task) on demand, queue arbitrary jobs, or cancel others'. `run` is the one
+    // with an actual public HTTP endpoint (queues/endpoints/run.js + handleSchedules.js both
+    // gate on `access.run` specifically); `queue`/`cancel` have no dedicated endpoint of their
+    // own today (queuing externally would go through `POST /api/payload-jobs`, closed below via
+    // `jobsCollectionOverrides`) but are locked down too for defense-in-depth/consistency — our
+    // own code only ever calls them with `overrideAccess: true`, so this can't lock us out.
+    access: { run: jobsAccessAdminOnly, queue: jobsAccessAdminOnly, cancel: jobsAccessAdminOnly },
+    // Fix round 1 (H2): the auto-generated `payload-jobs` collection (job docs + their run
+    // logs) otherwise ships with NO `access` block at all — same open-by-default problem as
+    // above, but for the collection's own REST/GraphQL CRUD (`POST`/`GET`/`PATCH`/`DELETE
+    // /api/payload-jobs[/:id]`). `jobsCollectionOverrides` is the one officially documented
+    // escape hatch for this (JobsConfig type, queues/config/types/index.d.ts) — spread the
+    // default collection Payload would have built and just add `access`.
+    jobsCollectionOverrides: ({ defaultJobsCollection }) => ({
+      ...defaultJobsCollection,
+      access: { create: isAdmin, delete: isAdmin, read: isAdmin, update: isAdmin },
+    }),
   },
   hooks: {
     afterError: [
@@ -98,4 +137,25 @@ export default buildConfig({
       },
     ],
   },
+})
+
+// Fix round 1 (H2): the auto-injected `payload-jobs-stats` global (scheduling bookkeeping —
+// last-run timestamps per queue/task, no user data) has NO override hook at all in 3.87 —
+// unlike the jobs collection's `jobsCollectionOverrides`, `JobsConfig` exposes nothing for this
+// global (verified directly: queues/config/global.js's `getJobStatsGlobal` always builds it
+// access-less, and config/sanitize.js pushes the result into `config.globals` unconditionally,
+// with no check for a user-supplied global of the same slug to merge with). Left alone it's
+// open to `Boolean(user)` read/update, same class of gap as the jobs collection.
+// `buildConfig()` returns the fully sanitized `Config` as a Promise; access checks read
+// `global.access.read`/`.update` off that same object live, at request time — so mutating it
+// here, once, right after the promise resolves and before any request is ever served, closes
+// the gap exactly as if it had been declared upfront. `.then()` (not `await`, since this module
+// has no top-level-await) keeps the export's existing `Promise<Config>` shape, which every
+// caller already accommodates (`getPayload({ config: await config })`).
+export default configPromise.then((config) => {
+  const statsGlobal = config.globals.find((g) => g.slug === 'payload-jobs-stats')
+  if (statsGlobal) {
+    statsGlobal.access = { read: isAdmin, readVersions: isAdmin, update: isAdmin }
+  }
+  return config
 })
