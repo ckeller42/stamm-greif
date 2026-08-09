@@ -618,6 +618,62 @@ describe('consent purge and delete cascade', () => {
     ).toBe(0)
   })
 
+  // Final review, M3: consent purge's original `suggestedPerson`-only query misses a
+  // misattributed row entirely — this person's actual face confirmed to a DIFFERENT person by
+  // mistake, while they're tagged on the same photo through a separate path (here, directly in
+  // `photos.people`, standing in for however that tag was actually made — a manual admin edit, or
+  // confirming a different face on the same photo to them). purgeFaceDataForPerson now also
+  // purges every face-suggestions row on any photo the hidden person is tagged on, regardless of
+  // what `suggestedPerson` those rows say — this is the row-by-id check that actually proves that
+  // path, not just the `suggestedPerson`-scoped query the first test in this block already covers.
+  it('hiding a person also purges a row on their photo that was misattributed to someone else', async () => {
+    const personA = await payload.create({
+      collection: 'people', data: { name: `MisattribA ${Date.now()}` }, overrideAccess: true,
+    })
+    createdPersonIds.push(personA.id)
+    const personB = await payload.create({
+      collection: 'people', data: { name: `MisattribB ${Date.now()}` }, overrideAccess: true,
+    })
+    createdPersonIds.push(personB.id)
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'misattributed', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const row = await firstSuggestionFor(photo.id)
+    // A's actual detected face, confirmed to B by mistake — the embedding is A's, the row names B.
+    await payload.update({
+      collection: 'face-suggestions', id: row.id,
+      data: { status: 'bestaetigt', suggestedPerson: personB.id }, overrideAccess: true,
+    })
+    // A is tagged on this same photo some other way (e.g. a direct admin edit of `people`, or a
+    // second face on the photo confirmed to them separately) — never through this specific row.
+    await payload.update({
+      collection: 'photos', id: photo.id, data: { people: [personA.id] }, overrideAccess: true,
+    })
+
+    // Present before, so the purge assertion below cannot pass vacuously.
+    const before = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0,
+    })
+    expect(before).toBeTruthy()
+    expect(String(before.suggestedPerson)).toBe(String(personB.id))
+
+    await payload.update({
+      collection: 'people', id: personA.id, data: { hidden: true }, overrideAccess: true,
+    })
+
+    // Raw by-id check — the row must be genuinely gone, not merely absent from a
+    // suggestedPerson-scoped query (which would pass vacuously here, since the row never named A).
+    const after = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0, disableErrors: true,
+    })
+    expect(after).toBeNull()
+  })
+
   it('hard-deleting a photo removes its suggestions via the FK cascade', async () => {
     const photo = await payload.create({
       collection: 'photos',
