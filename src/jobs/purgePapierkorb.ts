@@ -19,31 +19,8 @@ type PurgePapierkorbIO = {
 
 export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ req }) => {
   const cutoff = purgeCutoff()
-
-  // Fix round 1 (H1): a plain `where: { deletedAt: ... }` delete against the main `photos`
-  // table silently misses a whole class of soft-deletes. With versions.drafts enabled,
-  // Payload's own update path (node_modules/payload/dist/collections/operations/utilities/
-  // update.js) skips `db.updateOne` on the main row entirely whenever `isSavingDraft` is true —
-  // i.e. whenever a curator's edit ends in "save as draft" rather than "publish", *including*
-  // an edit that only sets `deletedAt`. That write lands solely in `_photos_v` (the versions
-  // table); `photos.deleted_at` stays NULL. Verified empirically (see the report's fix-round
-  // section, and tests/int/papierkorb.int.test.ts's draft-path case) with a raw
-  // `select deleted_at from photos` after exactly such an update.
-  //
-  // `payload.find({ draft: true, where })` is the fix: for a drafts-enabled collection this
-  // routes through `payload.db.queryDrafts` (collections/operations/find.js), which filters
-  // against each document's LATEST version — draft or published, whichever is current — not
-  // the main table. That's both correct (the version *is* the doc's current state, which is
-  // exactly what "is this soft-deleted" should mean) and confirmed empirically to surface
-  // draft-only deletedAt values the plain main-table query cannot see.
-  //
-  // Two-step (find ids, then delete-by-id) rather than a single draft-aware delete because
-  // Payload's `delete` operation has no `draft` option — deletion always removes the row (and
-  // its whole version history) regardless of draft/published state, so a plain by-id delete on
-  // the ids this find surfaces is correct and complete.
-  const { docs } = await req.payload.find({
-    collection: 'photos',
-    draft: true,
+  const findBase = {
+    collection: 'photos' as const,
     where: { deletedAt: { less_than_equal: cutoff.toISOString() } },
     // overrideAccess: true because this runs as a system task, not on behalf of any particular
     // user (canReadPhoto/isAdmin would otherwise gate it, and Papierkorb entries are meant to
@@ -52,18 +29,66 @@ export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ r
     limit: 0,
     depth: 0,
     req,
-  })
-  const ids = docs.map((doc) => doc.id)
+  }
 
-  // Fix round 1 (L2): accepted TOCTOU window. Between the `find` above and the `delete` below,
-  // a curator could un-bin (clear `deletedAt` on) one of these ids — it would still be deleted.
-  // Not closed: doing so would mean either re-checking each id's current `deletedAt` inside the
-  // same DB transaction as the delete (real complexity, e.g. no `payload.db.transaction`-scoped
-  // find+delete in the local API used elsewhere in this codebase) or accepting a race either
-  // way. The window is milliseconds, the purge runs once daily on a fixed schedule (not
-  // continuously), and restoring something in the literal instant it's being purged is already
-  // an edge case bordering on "was already too late" — the 30-day grace period exists precisely
-  // so a curator has ample time to notice and un-bin well before this runs.
+  // Step (a): the main `photos` table's OWN deletedAt — what's actually live/public right now.
+  // Anything that qualifies here is unambiguously safe to purge: no further check needed, since
+  // this direct query already reflects the live row's real state.
+  const { docs: liveOverdue } = await req.payload.find(findBase)
+  const qualifiedIds = new Set<(typeof liveOverdue)[number]['id']>(liveOverdue.map((doc) => doc.id))
+
+  // Step (b): H1's draft-aware find — for a drafts-enabled collection, `draft: true` routes
+  // through `payload.db.queryDrafts` (collections/operations/find.js), filtering against each
+  // document's LATEST version (draft or published) rather than the main table. This is what
+  // catches a soft-delete that only ever made it into a draft (Payload's update path
+  // (collections/operations/utilities/update.js) skips writing the main row at all whenever
+  // `isSavingDraft` is true) — but that draft-aware view is now known to be a SUPERSET that can
+  // include false positives too (see the guard below).
+  const { docs: draftAwareOverdue } = await req.payload.find({ ...findBase, draft: true })
+
+  // Fix round 2 (OVER-DELETION): a candidate found ONLY via the draft-aware query — i.e. not
+  // already qualified via the direct main-row check above — might be a document that is fully
+  // published and publicly LIVE right now (main row `_status: 'published'`, `deletedAt: null`)
+  // whose only "deleted" signal sits in an abandoned, never-published draft (a curator started
+  // a soft-delete, saved as draft instead of publishing, then walked away). Purging that would
+  // hard-delete a currently-visible photo, files included — the exact scenario the review round
+  // that added this guard was worried about. A candidate may only actually purge here if its
+  // real main-row state agrees: EITHER the main row doesn't exist at all (nothing published, so
+  // nothing public to protect — verified via create.js this is essentially never true in
+  // practice, since `create` always writes the main row even for a draft-status document, but
+  // checked anyway rather than assumed) OR the main row's OWN `deletedAt` is also set (the
+  // deletion did make it to the live row, just via a path this candidate-set also happens to
+  // include — in which case it was already in `qualifiedIds` from step (a) and this is a no-op
+  // add). Anything else — main row exists, live, `deletedAt` unset — is left alone and logged,
+  // not silently dropped, so a curator can find and finish (publish) the soft-delete themselves.
+  for (const candidate of draftAwareOverdue) {
+    if (qualifiedIds.has(candidate.id)) continue
+    const liveDoc = await req.payload.findByID({
+      collection: 'photos',
+      id: candidate.id,
+      overrideAccess: true,
+      disableErrors: true,
+      depth: 0,
+      req,
+    })
+    if (liveDoc && !liveDoc.deletedAt) {
+      req.payload.logger.warn({ msg: 'papierkorb-purge-skip-unbinned-live', id: candidate.id })
+      continue
+    }
+    qualifiedIds.add(candidate.id)
+  }
+
+  const ids = [...qualifiedIds]
+
+  // Fix round 1 (L2): accepted TOCTOU window. Between the qualification checks above and the
+  // `delete` below, a curator could un-bin (clear `deletedAt` on) one of these ids — it would
+  // still be deleted. Not closed: doing so would mean either re-checking each id's current
+  // `deletedAt` inside the same DB transaction as the delete (real complexity, e.g. no
+  // `payload.db.transaction`-scoped find+delete in the local API used elsewhere in this
+  // codebase) or accepting a race either way. The window is milliseconds, the purge runs on a
+  // fixed schedule (not continuously), and restoring something in the literal instant it's being
+  // purged is already an edge case bordering on "was already too late" — the 30-day grace period
+  // exists precisely so a curator has ample time to notice and un-bin well before this runs.
   let purgedCount = 0
   let failedCount = 0
   if (ids.length > 0) {

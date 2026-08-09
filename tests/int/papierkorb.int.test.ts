@@ -5,7 +5,7 @@
 // "jobs.access.run" describe block (fix round 1, H2) is the exception — that's a real HTTP
 // endpoint (`GET /api/payload-jobs/run`), so it needs the dev server running against the TEST
 // database, same setup as invites.int.test.ts / heic.int.test.ts.
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { getPayload, type Payload } from 'payload'
 import config from '@payload-config'
 import path from 'node:path'
@@ -41,14 +41,18 @@ async function existsById(id: number): Promise<boolean> {
   return Boolean(found)
 }
 
-// Fix round 1 (H1): the path a curator actually takes when soft-deleting from a photo that's
-// mid-edit — "save as draft" rather than "publish". Payload's own update path
+// A soft-delete that only ever lands in a DRAFT, never published — e.g. a curator mid-edit who
+// saves as draft rather than publish. Payload's own update path
 // (collections/operations/utilities/update.js) skips writing the main `photos` row entirely
-// whenever `isSavingDraft` is true, landing `deletedAt` only in `_photos_v` — verified directly
-// against a raw `select deleted_at from photos` after exactly this call (see the report's
-// fix-round section for the transcript). `draft: true` + `_status: 'draft'` on the update is
-// what triggers that path; overrideAccess: true for the same reason createSoftDeletedPhoto uses
-// it above.
+// whenever `isSavingDraft` is true, so `deletedAt` lands only in `_photos_v`; the main row stays
+// exactly as it was before this call — still fully published and live. Verified directly against
+// a raw `select deleted_at from photos` after exactly this call (see the report's fix-round
+// section for the transcript). `draft: true` + `_status: 'draft'` on the update is what triggers
+// that path; overrideAccess: true for the same reason createSoftDeletedPhoto uses it above.
+//
+// Used by the "over-deletion guard" test below — this data shape is now understood (fix round 2)
+// as the dangerous ambiguous case, not a safe-to-purge one: without further checking, the main
+// row it leaves behind is indistinguishable from "still genuinely live and public."
 async function createDraftSoftDeletedPhoto(deletedAt: Date) {
   const doc = await payload.create({
     collection: 'photos', filePath: fixture,
@@ -88,19 +92,35 @@ describe('Papierkorb auto-purge', () => {
     await payload.delete({ collection: 'photos', id: recentId, overrideAccess: true })
   })
 
-  it('hard-deletes a photo whose deletedAt was only ever saved as a draft (H1 regression)', async () => {
-    // The bug this guards: a plain `where: { deletedAt: ... }` delete against the main `photos`
-    // table never sees this photo at all (deletedAt lives only in `_photos_v`), so this test
-    // fails against that old implementation and passes against the draft-aware
-    // `payload.find({ draft: true, ... })` fix in src/jobs/purgePapierkorb.ts.
-    const oldId = await createDraftSoftDeletedPhoto(new Date(Date.now() - 31 * DAY_MS))
-    expect(await existsById(oldId)).toBe(true)
+  it(
+    'does NOT purge a published-and-live photo even when an abandoned newer draft carries an ' +
+      'old deletedAt (fix round 2, over-deletion guard)',
+    async () => {
+      // Supersedes the original H1 regression test's expectation. H1's fix (draft-aware find,
+      // LATEST-VERSION semantics) correctly surfaces this candidate — but review round 2 caught
+      // that this exact data shape is indistinguishable from a genuinely dangerous one: a photo
+      // that is fully PUBLISHED and LIVE right now (main `photos` row: `_status: 'published'`,
+      // `deletedAt: null`) whose only "deleted" signal sits in an abandoned draft a curator
+      // started and never published. Purging based on the draft alone would hard-delete a
+      // currently publicly-visible photo, files included. Correct behavior (src/jobs/
+      // purgePapierkorb.ts): leave it alone, and log a warning with the id so a curator can find
+      // and finish (publish) the abandoned soft-delete themselves.
+      const warnSpy = vi.spyOn(payload.logger, 'warn')
+      const id = await createDraftSoftDeletedPhoto(new Date(Date.now() - 31 * DAY_MS))
+      expect(await existsById(id)).toBe(true)
 
-    await payload.jobs.queue({ task: 'purgePapierkorb', input: {}, overrideAccess: true })
-    await payload.jobs.run({ queue: 'default', overrideAccess: true })
+      await payload.jobs.queue({ task: 'purgePapierkorb', input: {}, overrideAccess: true })
+      await payload.jobs.run({ queue: 'default', overrideAccess: true })
 
-    expect(await existsById(oldId)).toBe(false)
-  })
+      expect(await existsById(id)).toBe(true)
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ msg: 'papierkorb-purge-skip-unbinned-live', id }),
+      )
+
+      warnSpy.mockRestore()
+      await payload.delete({ collection: 'photos', id, overrideAccess: true })
+    },
+  )
 })
 
 describe('jobs.access.run (H2)', () => {
@@ -149,5 +169,31 @@ describe('jobs.access.run (H2)', () => {
     const cookie = await loginCookie(adminEmail)
     const res = await fetch('http://localhost:3000/api/payload-jobs/run', { headers: { cookie } })
     expect(res.status).toBe(200)
+  })
+
+  // Fix round 2: pins the OTHER two H2 closures — jobsCollectionOverrides and the post-
+  // buildConfig mutation of the payload-jobs-stats global — which had no committed regression
+  // test of their own before this round (only `jobs.access.run`, above, was pinned). Both
+  // verified against the real endpoints first (status codes below are the actual observed
+  // values, not assumed): a plain access-denied write on either returns Payload's standard 403,
+  // distinct from `run`'s special 401 above.
+  it('mitglied cannot POST /api/payload-jobs (jobsCollectionOverrides)', async () => {
+    const cookie = await loginCookie(mitgliedEmail)
+    const res = await fetch('http://localhost:3000/api/payload-jobs', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskSlug: 'purgePapierkorb', input: {} }),
+    })
+    expect(res.status).toBe(403)
+  })
+
+  it('mitglied cannot POST /api/globals/payload-jobs-stats (post-buildConfig global access mutation)', async () => {
+    const cookie = await loginCookie(mitgliedEmail)
+    const res = await fetch('http://localhost:3000/api/globals/payload-jobs-stats', {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stats: {} }),
+    })
+    expect(res.status).toBe(403)
   })
 })

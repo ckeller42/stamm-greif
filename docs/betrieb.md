@@ -153,9 +153,11 @@ bleiben dort 30 Tage sichtbar/wiederherstellbar. Danach werden sie **automatisch
 gelöscht — DB-Eintrag und alle gespeicherten Dateien (Original + Vorschaubilder).
 
 Das läuft in-process über Payloads Jobs-System (`src/jobs/purgePapierkorb.ts`, verdrahtet in
-`payload.config.ts`): täglich um 04:00 Uhr wird der Purge-Job eingereiht und im selben Lauf
-ausgeführt — kein separater Cron/Systemd-Timer auf dem Server nötig, das läuft mit im laufenden
-`app`-Container.
+`payload.config.ts`) — kein separater Cron/Systemd-Timer auf dem Server nötig, das läuft mit im
+laufenden `app`-Container. Der Purge-Job wird täglich um 04:00 Uhr **eingeplant**; ausgeführt
+wird er beim nächsten 15-Minuten-Tick danach (spätestens ~04:15) — Einplanen (`schedule`) und
+Ausführen (`autoRun`, alle 15 Minuten) sind zwei getrennte Mechanismen in Payloads Jobs-System,
+nicht ein einzelner Lauf um 04:00 Uhr.
 
 **Prüfen, ob er läuft:** ein strukturierter Log-Eintrag mit `"msg":"papierkorb-purge"` erscheint
 täglich (auch wenn nichts zu löschen war, dann `"purgedCount":0`) — mit `docker compose logs app`

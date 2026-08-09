@@ -17,16 +17,35 @@ export async function register(): Promise<void> {
   // `telemetry.ts`'s `crypto` import below) — Payload itself is Node-only (pg, crypto, fs), so
   // this must not attempt to run there.
   if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Fix round 2 (BOOT HANG): Next.js awaits register() before serving ANY request — including
+    // /api/health — so an unbounded getPayload() call here doesn't just fail to start the cron
+    // on a stalled DB, it hangs the entire server at boot, forever. Same bounded-timeout shape
+    // src/app/api/health/route.ts already uses for its own DB check (Promise.race against a
+    // setTimeout that rejects, clearTimeout in finally so the timer can't outlive the attempt).
+    // On timeout or any other failure: log one line and CONTINUE — never throw out of register().
+    // Degraded, not broken: the cron simply stays unstarted until the first normal admin/API
+    // request comes in and initializes Payload itself via @payloadcms/next's own
+    // `cron: true` calls (see the big comment above) — this is a best-effort "start it as early
+    // as possible", not the only path to it ever starting.
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
-      const [{ getPayload }, { default: config }] = await Promise.all([import('payload'), import('@payload-config')])
-      await getPayload({ config, cron: true })
+      await Promise.race([
+        (async () => {
+          const [{ getPayload }, { default: config }] = await Promise.all([
+            import('payload'),
+            import('@payload-config'),
+          ])
+          await getPayload({ config, cron: true })
+        })(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('payload init timeout (boot cron)')), 5000)
+        }),
+      ])
     } catch (err) {
-      // Must never crash server boot — e.g. the DB briefly unreachable at container start. The
-      // cron will still start on the first normal admin/API request via @payloadcms/next's own
-      // `cron: true` calls; this is a best-effort "start it as early as possible", not the only
-      // path to it ever starting.
       const e = err instanceof Error ? err : new Error(String(err))
       recordError({ errorId: newErrorId(), msg: e.message, stack: e.stack, source: 'instrumentation-register' })
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 }
