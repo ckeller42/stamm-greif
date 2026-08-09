@@ -163,6 +163,26 @@ jobs:
       - name: Verify instrumentation is shipped
         run: docker compose run --rm --no-deps --entrypoint sh app -c 'test -f /app/.next/server/instrumentation.js' && echo "instrumentation shipped"
 
+      # P2.3, Task 3 review: same class of silent-failure the instrumentation check above guards
+      # against, for onnxruntime-web's .wasm. Next's file tracer does NOT sweep it into
+      # .next/standalone automatically (verified directly, task-3-report.md) — next.config.ts's
+      # `outputFileTracingIncludes` is what puts it there, and a future change to that config (or
+      # a Next/onnxruntime-web upgrade that moves where the tracer resolves the package) could
+      # silently drop it again: `docker build`, `pnpm build`'s probe-faces.mjs (runs via tsx
+      # against source in the `build` stage, never touches the traced `run`-stage bundle) and the
+      # HEIC probe below would all still pass, and the only symptom would be "no suggestions,
+      # ever" in production, weeks later. Real path confirmed by running the built image locally
+      # and listing it (`docker run --rm --entrypoint sh <image> -c 'ls /app/node_modules/.pnpm/
+      # onnxruntime-web@*/node_modules/onnxruntime-web/dist/*.wasm'`) — there is no top-level
+      # `/app/node_modules/onnxruntime-web` symlink in the standalone output at all, only the real
+      # pnpm-store-shaped path. Version-agnostic glob (matches next.config.ts's own glob) so a
+      # routine onnxruntime-web bump doesn't need this step edited in lockstep.
+      - name: Verify onnxruntime-web wasm is shipped
+        run: |
+          docker compose run --rm --no-deps --entrypoint sh app -c \
+            'ls /app/node_modules/.pnpm/onnxruntime-web@*/node_modules/onnxruntime-web/dist/*.wasm >/dev/null' \
+            && echo "onnxruntime-web wasm shipped"
+
       - name: Boot stack and migrate
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml up -d db

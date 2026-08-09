@@ -141,6 +141,22 @@ export const detectFacesTask: TaskConfig<DetectFacesIO> = {
   // Two attempts, not three: there is no network in this path, so a second failure is a bug or a
   // missing model — retrying a third time fixes neither.
   retries: { attempts: 2, backoff: { type: 'exponential', delay: 30_000 } },
+  // P2.3 review (round 2): key by photoId, exclusive (the default) so two jobs for the same
+  // photo — publish, then a quick file-replace before the first has run — never execute
+  // concurrently. Verified against node_modules/payload/dist/queues/operations/runJobs/index.js:
+  // this is enforced twice — jobs whose concurrencyKey is already `processing: true` are excluded
+  // from the next batch's selection query, AND if two same-key jobs somehow land in the SAME
+  // batch (both still pending when that query ran), all but one are released back to `pending`
+  // before running. Either way only one ever executes at a time; the other runs afterward, on a
+  // later tick — not dropped (that would need `supersedes: true`, which this deliberately doesn't
+  // set: a superseded-away job would never get its own run recorded, and detectFacesHandler's
+  // existing delete-then-recreate idempotency already makes a harmless no-op of a second,
+  // serialized run against unchanged input). Requires `jobs.enableConcurrencyControl: true` in
+  // payload.config.ts — without it this field is silently ignored, not an error.
+  concurrency: {
+    key: ({ input }) => String(input.photoId),
+    exclusive: true,
+  },
 }
 
 /** Shared by the publish hook and the backfill task so the eligibility rule exists exactly once. */

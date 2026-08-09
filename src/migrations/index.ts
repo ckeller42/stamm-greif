@@ -3,6 +3,7 @@ import * as migration_20260809_093215_exif_fields from './20260809_093215_exif_f
 import * as migration_20260809_110711_phash_fields from './20260809_110711_phash_fields';
 import * as migration_20260809_175517_face_suggestions from './20260809_175517_face_suggestions';
 import * as migration_20260809_182337_detect_faces_task from './20260809_182337_detect_faces_task';
+import * as migration_20260809_191236_concurrency_control from './20260809_191236_concurrency_control';
 
 export const migrations = [
   {
@@ -28,6 +29,11 @@ export const migrations = [
   {
     up: migration_20260809_182337_detect_faces_task.up,
     down: migration_20260809_182337_detect_faces_task.down,
-    name: '20260809_182337_detect_faces_task'
+    name: '20260809_182337_detect_faces_task',
+  },
+  {
+    up: migration_20260809_191236_concurrency_control.up,
+    down: migration_20260809_191236_concurrency_control.down,
+    name: '20260809_191236_concurrency_control'
   },
 ];

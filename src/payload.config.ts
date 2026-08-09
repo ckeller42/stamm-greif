@@ -74,6 +74,23 @@ const configPromise = buildConfig({
   // due to purge is a no-op.
   jobs: {
     tasks: [purgePapierkorbTask, detectFacesTask],
+    // P2.3 review (Task 3, round 2): two enqueues for the same photo close together (publish,
+    // then a quick file-replace before the first job has run) land as two separate rows in
+    // `payload_jobs`. Without this, `runJobs`' `Promise.all` batch (queues/operations/runJobs/
+    // index.js) can pick both up on the same tick and run them truly concurrently — both read
+    // an empty `decided` set before either has written anything, so detectFacesHandler's own
+    // idempotency (delete-then-recreate 'offen' rows) never gets a chance to fire, and the
+    // kurator sees duplicate offen rows for the same face. `enableConcurrencyControl` is the
+    // documented, built-in fix for exactly this (node_modules/payload/dist/queues/config/types/
+    // index.d.ts's own doc comment: "prevent race conditions" via a `concurrencyKey` field)
+    // rather than a hand-rolled "skip enqueue if a pending row already exists" check, which would
+    // still race the same way against a job that's already `processing: true` when the second
+    // enqueue's own existence-check query runs. detectFacesTask's own `concurrency` (see
+    // src/jobs/detectFaces.ts) is what actually opts `detectFaces` into it — this flag only turns
+    // the mechanism on and adds the (indexed, nullable) `concurrencyKey` column every other task
+    // leaves unset, so purgePapierkorb's own jobs are entirely unaffected. Requires a migration
+    // (see the concurrency_key migration) — the type's own doc comment says so explicitly.
+    enableConcurrencyControl: true,
     // Fix round 1 (M4): `autoRun` only ever RUNS jobs already sitting in the queue — it does
     // not enqueue new ones (that's `schedule`, above). A daily `autoRun` cron here was wrong on
     // two counts: (1) it enqueues-then-immediately-runs on the same tick only by coincidence of

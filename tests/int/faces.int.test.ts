@@ -239,6 +239,44 @@ describe('detection runs on publish, not on draft', () => {
   })
 })
 
+// P2.3 review (round 2): two detectFaces jobs for the SAME photo close together — the realistic
+// trigger is a publish followed by a quick file-replace before the first job has run — used to
+// race: runJobs' own batch is a Promise.all (queues/operations/runJobs/index.js), so both jobs
+// could execute truly concurrently, both reading an empty `decided` set before either had written
+// anything, leaving two duplicate 'offen' rows for the same face. Fixed via
+// jobs.enableConcurrencyControl + detectFacesTask's own `concurrency: { key: photoId, exclusive:
+// true }` (payload.config.ts / src/jobs/detectFaces.ts). Concurrency serializes rather than drops
+// the second job — verified against runJobs' own source that an exclusive-key job whose key is
+// already `processing: true` is excluded from the NEXT batch's selection query, so a single
+// `jobs.run()` call only ever advances one of the two; the second call is what lets the
+// now-freed key's job actually run. Two `runFacesQueue()` calls is therefore the realistic
+// minimum here, not padding.
+describe('concurrent enqueues for the same photo never produce duplicate suggestions', () => {
+  it('two detectFaces jobs queued back-to-back for one photo yield one offen row per face, not two', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'Doppelt eingereiht', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+
+    // Photos' own afterChange hook already enqueued one job for this create (publish transition).
+    // Queue a second one directly, same task/queue/input shape as enqueueDetectFaces
+    // (src/jobs/detectFaces.ts) — standing in for the quick file-replace re-enqueue.
+    await payload.jobs.queue({ task: 'detectFaces', input: { photoId: photo.id }, queue: 'faces', overrideAccess: true })
+
+    await runFacesQueue() // advances whichever of the two jobs wins the concurrency key
+    await runFacesQueue() // advances the other, now that the key is free again
+
+    const docs = await suggestionsFor(photo.id)
+    const offen = docs.filter((d) => d.status === 'offen')
+    // gesicht-a.jpg has exactly one face (asserted elsewhere in this file) — one offen row per
+    // detected face, never two for the same face, regardless of how many jobs ran.
+    expect(offen.length).toBe(1)
+  })
+})
+
 // THE acceptance test for keypoint alignment. A plain box crop instead of the 5-point ArcFace
 // alignment still produces plausible-looking 512-d vectors — it just makes them useless for
 // matching. Nothing else in this suite would catch that; this does.
