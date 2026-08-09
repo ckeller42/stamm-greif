@@ -58,3 +58,27 @@ export function hammingDistance(a: string, b: string): number {
   }
   return count
 }
+
+// The two all-identical-bit hashes a 9x8 dHash can ever produce: all-zero (every row is flat, or
+// non-decreasing left-to-right — a solid color OR a smooth ascending gradient, see this file's
+// top comment) and all-one (every row strictly decreases left-to-right at all 8 sample points —
+// in practice only ever seen from a near-perfect monotonic gradient, itself a degenerate,
+// content-free pattern for the same reason). Neither carries any real "this looks like THIS
+// specific photo" signal: any two unrelated flat/gradient-degenerate images collide on one of
+// these two values by construction, not by coincidence, so a hamming-distance comparison
+// involving either is meaningless in both directions — it would either falsely flag two
+// unrelated flat images as duplicates of each other, or let a genuinely distinct upload dodge a
+// legitimate flag by accidentally landing on one of these two hashes.
+// Exported (not just `isDegenerateHash` below) so Photos.ts's duplicate-check query can build its
+// `not_in` DB-side filter from this exact same source of truth instead of re-hardcoding the two
+// literals a second time — a single place to change if this set ever needs to grow.
+export const DEGENERATE_HASHES = new Set(['0000000000000000', 'ffffffffffffffff'])
+
+/**
+ * True for the two dHash values that carry no comparison evidence (see DEGENERATE_HASHES above).
+ * The duplicate-detection hook (src/collections/Photos.ts) uses this to skip the comparison
+ * entirely — in BOTH directions — whenever either side of a pairwise check would be degenerate.
+ */
+export function isDegenerateHash(hash: string): boolean {
+  return DEGENERATE_HASHES.has(hash)
+}

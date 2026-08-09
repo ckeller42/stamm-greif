@@ -192,6 +192,20 @@ ein fälschlich markiertes Foto erneut hochgeladen, um die Markierung loszuwerde
 `duplicateOf`/`duplicateSuspected` des ursprünglichen Eintrags bestehen — die Markierung muss in
 diesem Fall manuell im Admin-Bereich entfernt werden.
 
+Ein paar bewusste Einschränkungen:
+
+- Die Prüfung läuft absichtlich über **alle** vorhandenen Fotos, auch verborgene, im Papierkorb
+  liegende oder unveröffentlichte — nur so fällt in der Moderation auf, wenn jemand die Kopie eines
+  bereits zurückgezogenen Fotos erneut hochlädt.
+- Fotos aus der Zeit **vor** diesem Feature haben keinen Perceptual Hash und nehmen an der Prüfung
+  nicht teil (weder als neu zu prüfendes Foto noch als möglicher Treffer für andere). Ein
+  nachträgliches Backfill-Skript für den Altbestand ist ein mögliches späteres Follow-up, aber noch
+  nicht umgesetzt.
+- Die Markierung ist **Best-Effort**, kein exakter Abgleich: sie läuft nur beim Erstellen (siehe
+  oben) und vergleicht gegen den zum jeweiligen Zeitpunkt vorhandenen Bestand — zwei nahezu
+  gleichzeitige Uploads desselben Fotos können sich dadurch gegenseitig verpassen, wenn der zweite
+  Upload bereits läuft, bevor der erste vollständig gespeichert ist.
+
 ## Monitoring
 
 - **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200

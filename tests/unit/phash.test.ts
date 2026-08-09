@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeDHash, hammingDistance } from '@/lib/phash'
+import { computeDHash, hammingDistance, isDegenerateHash } from '@/lib/phash'
 
 // 9x8 = 72 grayscale bytes, matching sharp(...).grayscale().resize(9, 8, { fit: 'fill' }).raw().
 function solidBuffer(value: number): Buffer {
@@ -78,5 +78,24 @@ describe('hammingDistance', () => {
   it('throws on malformed (wrong-length) hash input', () => {
     expect(() => hammingDistance('abc', '0000000000000000')).toThrow(/16-character/)
     expect(() => hammingDistance('0000000000000000', 'toolonghexvaluexxx')).toThrow(/16-character/)
+  })
+})
+
+describe('isDegenerateHash', () => {
+  it('is true for all-zero and all-one hashes', () => {
+    expect(isDegenerateHash('0000000000000000')).toBe(true)
+    expect(isDegenerateHash('ffffffffffffffff')).toBe(true)
+  })
+
+  it('is true for both a solid-color image and a smooth ascending gradient (both hash all-zero)', () => {
+    // Direct consequence of the "flat images collide" property computeDHash's own tests pin —
+    // isDegenerateHash doesn't (and can't) tell WHY a hash came out all-zero, only that it did.
+    expect(isDegenerateHash(computeDHash(solidBuffer(0)))).toBe(true)
+    expect(isDegenerateHash(computeDHash(solidBuffer(255)))).toBe(true)
+    expect(isDegenerateHash(computeDHash(rowPatternBuffer([0, 1, 2, 3, 4, 5, 6, 7, 8])))).toBe(true)
+  })
+
+  it('is false for an ordinary, non-degenerate hash', () => {
+    expect(isDegenerateHash(computeDHash(rowPatternBuffer([10, 200, 5, 250, 0, 128, 64, 32, 16])))).toBe(false)
   })
 })

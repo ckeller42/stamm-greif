@@ -66,7 +66,21 @@ export function UploadForm() {
     try {
       for (const fs of files) {
         if (fs.status === 'fertig') continue
-        setFiles((cur) => cur.map((f) => (f === fs ? { ...f, status: 'lädt', serverError: undefined } : f)))
+        // m6 (review): a retry (re-submit after a partial failure) must clear BOTH the previous
+        // attempt's serverError and duplicateSuspected — otherwise a file that was flagged as a
+        // possible duplicate on a prior attempt would still show the warning while "lädt" is
+        // showing for the new attempt, even if the retry's own response comes back clean.
+        // Match predicate aligned with the one two lines below (`f.file === fs.file`, not
+        // `f === fs`) for consistency — both happen to match the same element under this
+        // component's current control flow (nothing else can reorder/replace `files` mid-loop:
+        // the file input and submit button are both disabled while `uploading` is true), but
+        // matching by the `File` object rather than by FileState identity is the more robust
+        // invariant to hold if that ever changes, and having both status-transition call sites
+        // use the same predicate is easier to reason about than two different ones that happen to
+        // agree today.
+        setFiles((cur) =>
+          cur.map((f) => (f.file === fs.file ? { ...f, status: 'lädt', serverError: undefined, duplicateSuspected: undefined } : f)),
+        )
         const { status, serverError, duplicateSuspected } = await uploadOne(fs)
         setFiles((cur) => cur.map((f) => (f.file === fs.file ? { ...f, status, serverError, duplicateSuspected } : f)))
       }

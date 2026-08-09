@@ -1,6 +1,8 @@
 import type {
   Access,
+  CollectionAfterDeleteHook,
   CollectionBeforeChangeHook,
+  CollectionBeforeDeleteHook,
   CollectionBeforeOperationHook,
   CollectionConfig,
   FieldAccess,
@@ -12,7 +14,7 @@ import exifReader from 'exif-reader'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
 import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/lib/exif-fill'
-import { computeDHash, hammingDistance } from '@/lib/phash'
+import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
 
 // Spec P2.2: two same-motif scans/re-exports of one slide produce dHashes that differ only in a
 // handful of bits (compression noise, minor recrop) — chosen empirically-plausible per the
@@ -216,47 +218,160 @@ const applyPhash: CollectionBeforeChangeHook = async ({ req, data, operation }) 
   // the "no duplicate found" path is a true no-op on the return shape — same style
   // applyExifFill above uses for its own `fill` object.
   let duplicateFields: { duplicateOf?: number; duplicateSuspected?: boolean } = {}
+
+  // m2 (review): a degenerate hash (see isDegenerateHash's own comment) carries no comparison
+  // evidence in EITHER direction — this upload's own hash is still stored below (phash is always
+  // recorded; only the COMPARISON is skipped), but it can never itself be flagged, and it must
+  // never serve as a match target for some later, genuinely unrelated upload either. The `where`
+  // clause below excludes existing degenerate hashes from the candidate corpus for exactly that
+  // second reason.
+  if (!isDegenerateHash(phash)) {
+    try {
+      const existing = await req.payload.find({
+        collection: 'photos',
+        where: {
+          and: [
+            { phash: { exists: true } },
+            { phash: { not_in: Array.from(DEGENERATE_HASHES) } },
+          ],
+        },
+        select: { phash: true },
+        pagination: false,
+        depth: 0,
+        overrideAccess: true,
+        req,
+      })
+      let closestId: number | undefined
+      let closestDistance = Infinity
+      for (const doc of existing.docs) {
+        if (!doc.phash || isDegenerateHash(doc.phash)) continue
+        const distance = hammingDistance(phash, doc.phash)
+        if (distance < closestDistance) {
+          closestDistance = distance
+          closestId = doc.id
+        }
+      }
+      // NEVER blocks the upload either way — this only ever adds informational fields for a
+      // moderator to review, matching the spec's "flagged, NOT silently duplicated, and NOT
+      // hard-blocked" requirement.
+      if (closestId !== undefined && closestDistance <= DUPLICATE_HAMMING_THRESHOLD) {
+        duplicateFields = { duplicateOf: closestId, duplicateSuspected: true }
+      }
+    } catch (err) {
+      // Same non-fatal contract as computePhashOnUpload: a failed duplicate lookup must never
+      // block the actual upload it's trying to enrich.
+      req.payload.logger.info({
+        msg: 'phash-duplicate-check-skipped',
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+  return { ...data, phash, ...duplicateFields }
+}
+
+// m1 (review, P2.2): when a photo is hard-deleted, any OTHER photo whose duplicateOf pointed at
+// it must have duplicateSuspected cleared too. The FK itself (`ON DELETE SET NULL` on
+// photos.duplicate_of_id — see the phash_fields migration) already nulls duplicateOf at the DB
+// level the instant the row is gone, but the sibling boolean is a separate column the FK has no
+// say over, and would otherwise be left stuck at `true`, pointing at nothing.
+//
+// Capture-then-apply across beforeDelete/afterDelete, not a single afterDelete query: verified
+// directly against node_modules/payload/dist/collections/operations/{deleteByID,delete}.js —
+// both call `beforeDelete` hooks, THEN `payload.db.deleteOne` (the actual DB delete — what fires
+// the FK cascade), THEN `afterDelete` hooks. By the time afterDelete runs, the FK has ALREADY
+// nulled every referencing photo's duplicateOf, so a `where: { duplicateOf: { equals: id } }`
+// query in afterDelete would find nothing. The referencing ids must be captured BEFORE the
+// delete, in beforeDelete, while duplicateOf still points at the doc about to be deleted.
+//
+// Keyed by the deleted doc's own id on req.context — exact pattern already established by
+// src/hooks/sync-hidden-photos.ts's captureHiddenPhotosBeforePersonDelete /
+// recomputeHiddenPhotosAfterPersonDelete for the analogous person-deletion cascade — rather than
+// a single shared value: Payload's bulk `delete({ where })` (the Papierkorb purge job's own
+// delete path, and any future admin bulk-delete) runs every matched doc's beforeDelete/
+// afterDelete via `docs.map(async ...)` in collections/operations/delete.js — concurrently, not
+// sequentially — so a single shared context value would risk one doc's captured ids being
+// clobbered by another's before its own afterDelete gets to read them. Keying by id (globally
+// unique regardless of concurrency) avoids that entirely.
+const DUPLICATE_CLEANUP_CONTEXT_KEY = 'duplicateCleanupPhotoIds'
+
+const captureDuplicateReferencesBeforeDelete: CollectionBeforeDeleteHook = async ({ req, id }) => {
   try {
-    const existing = await req.payload.find({
+    const referencing = await req.payload.find({
       collection: 'photos',
-      where: { phash: { exists: true } },
-      select: { phash: true },
+      where: { duplicateOf: { equals: id } },
+      select: {},
       pagination: false,
       depth: 0,
       overrideAccess: true,
       req,
     })
-    let closestId: number | undefined
-    let closestDistance = Infinity
-    for (const doc of existing.docs) {
-      if (!doc.phash) continue
-      const distance = hammingDistance(phash, doc.phash)
-      if (distance < closestDistance) {
-        closestDistance = distance
-        closestId = doc.id
-      }
-    }
-    // NEVER blocks the upload either way — this only ever adds informational fields for a
-    // moderator to review, matching the spec's "flagged, NOT silently duplicated, and NOT
-    // hard-blocked" requirement.
-    if (closestId !== undefined && closestDistance <= DUPLICATE_HAMMING_THRESHOLD) {
-      duplicateFields = { duplicateOf: closestId, duplicateSuspected: true }
-    }
+    const store = (req.context[DUPLICATE_CLEANUP_CONTEXT_KEY] ??= {}) as Record<string, number[]>
+    store[String(id)] = referencing.docs.map((doc) => doc.id)
   } catch (err) {
-    // Same non-fatal contract as computePhashOnUpload: a failed duplicate lookup must never
-    // block the actual upload it's trying to enrich.
+    // Non-fatal: this is a cleanup enrichment, not a deletion precondition — a failed lookup here
+    // must never block the delete itself.
     req.payload.logger.info({
-      msg: 'phash-duplicate-check-skipped',
+      msg: 'duplicate-cleanup-capture-skipped',
       reason: err instanceof Error ? err.message : String(err),
     })
   }
-  return { ...data, phash, ...duplicateFields }
+}
+
+const clearDuplicateFlagsAfterDelete: CollectionAfterDeleteHook = async ({ req, id }) => {
+  const store = req.context[DUPLICATE_CLEANUP_CONTEXT_KEY] as Record<string, number[]> | undefined
+  const referencingIds = store?.[String(id)]
+  if (!referencingIds) return
+  delete store[String(id)]
+  // Per-id update (the same call shape sync-hidden-photos.ts's recomputePhoto already uses for
+  // an analogous propagate-a-boolean cascade) rather than a single bulk `where: { id: { in } }`
+  // update: leaves each target document's own `_status`/draft state exactly as Payload's normal
+  // single-document update path already handles it, with no new bulk-update behavior to reason
+  // about here.
+  for (const photoId of referencingIds) {
+    try {
+      await req.payload.update({
+        collection: 'photos',
+        id: photoId,
+        data: { duplicateOf: null, duplicateSuspected: false },
+        overrideAccess: true,
+        depth: 0,
+        req,
+      })
+    } catch (err) {
+      req.payload.logger.info({
+        msg: 'duplicate-cleanup-apply-skipped',
+        photoId,
+        reason: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
 }
 
 // Field-level access has a slightly different arg shape than collection-level Access (id can be
 // string | number), so `isKuratorOrAdmin` from access/roles doesn't structurally match here.
 const isKuratorOrAdminField: FieldAccess = ({ req }) =>
   req.user?.role === 'admin' || req.user?.role === 'kurator'
+
+// M1 hardening (review, P2.2): kurator/admin, OR the photo's own uploader. The upload form
+// (UploadForm.tsx) needs the uploading mitglied to see their OWN upload's duplicate warning —
+// that's the entire point of duplicateSuspected being a separate, member-visible boolean instead
+// of just gating everything behind duplicateOf's kurator/admin-only read — but a DIFFERENT
+// mitglied browsing/fetching that same photo must not learn anything about a possible duplicate
+// they have no stake in.
+//
+// Verified directly against node_modules/payload/dist/fields/hooks/afterRead/promise.js: field
+// read-access is evaluated in Payload's afterRead pass with the FULL parent `doc` already
+// populated (`field.access.read({ id: doc.id, data: doc, doc, ... })`), and that same afterRead
+// pass runs over the document Payload hands back as the CREATE response too — not just later
+// re-fetches — so the uploader's own create response (what uploadOne() in UploadForm.tsx
+// actually reads) is covered by the exact same code path as any other read, not a special case.
+const canReadDuplicateSuspected: FieldAccess = ({ req, doc }) => {
+  if (req.user?.role === 'admin' || req.user?.role === 'kurator') return true
+  if (!req.user) return false
+  const uploader = doc?.uploader
+  const uploaderId = typeof uploader === 'object' && uploader !== null ? uploader.id : uploader
+  return uploaderId != null && String(uploaderId) === String(req.user.id)
+}
 
 const canReadPhoto: Access = ({ req: { user } }) => {
   if (!user) return false
@@ -321,6 +436,8 @@ export const Photos: CollectionConfig = {
     // computePhashOnUpload must run AFTER convertHeicToJpeg (see its own comment above) — the
     // opposite ordering constraint from extractExifOnUpload, which must run BEFORE it.
     beforeOperation: [extractExifOnUpload, convertHeicToJpeg, computePhashOnUpload],
+    beforeDelete: [captureDuplicateReferencesBeforeDelete],
+    afterDelete: [clearDuplicateFlagsAfterDelete],
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
         if (operation === 'create' && req.user) {
@@ -468,17 +585,19 @@ export const Photos: CollectionConfig = {
       access: { read: isKuratorOrAdminField, create: () => false, update: () => false },
     },
     // The member-facing counterpart to duplicateOf above: a plain boolean carries none of the
-    // existence-leak risk a relationship does, so it's left readable by anyone who can read the
-    // photo at all (no field-level `read` override) — this is exactly what the upload form (UploadForm.tsx)
-    // reads to show de.upload.duplicateWarning to the uploader themselves, who otherwise has no
-    // way to see duplicateOf's target.
+    // existence-leak risk a relationship does — but "readable by anyone who can read the photo at
+    // all" is still wider than it needs to be: this is exactly what the upload form
+    // (UploadForm.tsx) reads to show de.upload.duplicateWarning, and that warning is only ever
+    // meant for the person who UPLOADED this specific photo, not every mitglied who happens to
+    // browse it later. `canReadDuplicateSuspected` above locks this to kurator/admin OR the
+    // photo's own uploader (see its own comment for why the create response is provably covered).
     {
       name: 'duplicateSuspected',
       type: 'checkbox',
       defaultValue: false,
       label: 'Mögliches Duplikat',
       admin: { readOnly: true, position: 'sidebar' },
-      access: { create: () => false, update: () => false },
+      access: { read: canReadDuplicateSuspected, create: () => false, update: () => false },
     },
   ],
 }
