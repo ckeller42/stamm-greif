@@ -11,7 +11,7 @@ import sharp from 'sharp'
 import exifReader from 'exif-reader'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
-import { computeExifFill, type ParsedExif } from '@/lib/exif-fill'
+import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/lib/exif-fill'
 
 // Alpine's libheif (see Dockerfile) can *decode* HEIC/HEIF but has no HEVC encoder, so it can
 // only ever write other formats, never HEIC itself — "heifsave: Unsupported compression" is
@@ -130,10 +130,20 @@ const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation
 // Applies extractExifOnUpload's stashed req.context.exif to the actual document data. Split
 // from that hook because beforeChange (unlike beforeOperation) has a stable, typed `data` to
 // merge into — see extractExifOnUpload's comment for why the two are separate hooks.
-const applyExifFill: CollectionBeforeChangeHook = ({ req, data }) => {
+const applyExifFill: CollectionBeforeChangeHook = ({ req, data, originalDoc }) => {
   const exif = (req.context as { exif?: ParsedExif }).exif
   if (!exif) return data
-  const fill = computeExifFill(exif, { datePrecision: data.datePrecision, dateValue: data.dateValue })
+  // Fix round 1 (M3): see resolveIncomingDateFields' own comment (src/lib/exif-fill.ts) for why
+  // a plain `data.datePrecision`/`data.dateValue` read isn't enough on a partial update.
+  const fill = computeExifFill(exif, resolveIncomingDateFields(data, originalDoc))
+  // Fix round 1 (L4): clear it once consumed. req.context is scoped to the whole REQUEST, not
+  // to one document — a bulk `update` by `where` (matching more than one doc) would reuse this
+  // same req/context across every matched doc's beforeChange call. Today's real entry points
+  // (member upload, admin single-doc edit) never attach a file to a multi-doc update — Payload
+  // has no such endpoint — so this can't happen on any path this app actually exposes, but
+  // clearing it after the first (and, in practice, only) consumer keeps the hook correct even
+  // if that ever changes, at zero cost here.
+  delete (req.context as { exif?: ParsedExif }).exif
   return { ...data, ...fill }
 }
 
@@ -276,23 +286,33 @@ export const Photos: CollectionConfig = {
     // itself already knew. GPS pair powers a future map view; read-only because there's no
     // sensible manual correction UI for either yet, and both are meant to reflect the file, not
     // curator input.
+    //
+    // exifTakenAt stays open to any authenticated reader — a capture date carries roughly the
+    // same sensitivity as the fuzzy-date fields above, which already are.
     {
       name: 'exifTakenAt',
       type: 'date',
       label: 'Aufnahmedatum (EXIF)',
       admin: { readOnly: true, position: 'sidebar' },
     },
+    // Fix round 1 (M2): admin.readOnly is UI-only (same caveat as `uploader` above) — without a
+    // field-level `read` restriction, the raw API happily returns these to any authenticated
+    // mitglied. Unlike exifTakenAt, GPS coordinates from a modern phone upload are frequently a
+    // member's own home/street address, not just "when" but "where a specific device was" —
+    // read access is kurator/admin-only, same gate deletedAt's `update` already uses above.
     {
       name: 'exifLat',
       type: 'number',
       label: 'EXIF-Breitengrad',
       admin: { readOnly: true, position: 'sidebar' },
+      access: { read: isKuratorOrAdminField },
     },
     {
       name: 'exifLng',
       type: 'number',
       label: 'EXIF-Längengrad',
       admin: { readOnly: true, position: 'sidebar' },
+      access: { read: isKuratorOrAdminField },
     },
   ],
 }

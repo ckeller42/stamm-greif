@@ -25,6 +25,7 @@ import path from 'node:path'
 
 let payload: Payload
 let memberEmail: string
+let kuratorEmail: string
 const password = 'geheim123'
 const createdPhotoIds: number[] = []
 
@@ -33,10 +34,16 @@ const EXPECTED_LNG = -(8 + 30 / 60 + 15 / 3600)
 
 beforeAll(async () => {
   payload = await getPayload({ config: await config })
-  memberEmail = `exif${Date.now()}@example.com`
+  memberEmail = `exif-mitglied-${Date.now()}@example.com`
+  kuratorEmail = `exif-kurator-${Date.now()}@example.com`
   await payload.create({
     collection: 'users',
-    data: { name: 'Exif Test', email: memberEmail, password, role: 'mitglied' },
+    data: { name: 'Exif Test Mitglied', email: memberEmail, password, role: 'mitglied' },
+    overrideAccess: true,
+  })
+  await payload.create({
+    collection: 'users',
+    data: { name: 'Exif Test Kurator', email: kuratorEmail, password, role: 'kurator' },
     overrideAccess: true,
   })
 })
@@ -47,23 +54,33 @@ afterAll(async () => {
   }
 })
 
-async function loginCookie(): Promise<string> {
+async function loginCookie(email: string): Promise<string> {
   const res = await fetch('http://localhost:3000/api/users/login', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: memberEmail, password }),
+    body: JSON.stringify({ email, password }),
   })
   expect(res.ok).toBe(true)
   return res.headers.get('set-cookie') ?? ''
 }
 
 async function uploadFixture(payloadFields: Record<string, unknown>) {
-  const cookie = await loginCookie()
+  const cookie = await loginCookie(memberEmail)
   const body = new FormData()
   const bytes = await readFile(path.resolve(process.cwd(), 'tests/fixtures/dia-exif.jpg'))
   body.append('file', new Blob([bytes], { type: 'image/jpeg' }), 'dia-exif.jpg')
   body.append('_payload', JSON.stringify({ _status: 'draft', ...payloadFields }))
   const res = await fetch('http://localhost:3000/api/photos', { method: 'POST', headers: { cookie }, body })
   return res
+}
+
+// Fix round 1 (M2): exifLat/exifLng are kurator/admin-only reads at the field-access level
+// (own-upload status doesn't matter — this isn't a document-ownership check), so proving they
+// were actually stored needs a re-fetch as a role that can see them.
+async function fetchAsKurator(id: number): Promise<PhotoDoc> {
+  const cookie = await loginCookie(kuratorEmail)
+  const res = await fetch(`http://localhost:3000/api/photos/${id}`, { headers: { cookie } })
+  expect(res.status).toBe(200)
+  return (await res.json()) as PhotoDoc
 }
 
 interface PhotoDoc {
@@ -80,21 +97,31 @@ describe('EXIF-on-upload prefill', () => {
     const res = await uploadFixture({ datePrecision: 'unknown' })
     const json = (await res.json()) as { doc?: PhotoDoc; errors?: { message: string }[] }
     expect(res.status, JSON.stringify(json.errors)).toBe(201)
-    if (json.doc?.id) createdPhotoIds.push(json.doc.id)
+    const id = json.doc?.id as number
+    createdPhotoIds.push(id)
     const doc = json.doc as PhotoDoc
 
     expect(doc.datePrecision).toBe('exact')
     expect(doc.dateValue).toBe('2015-07-04')
+    // exifTakenAt is open to any authenticated reader, including the mitglied who uploaded it.
     expect(doc.exifTakenAt).toBe('2015-07-04T12:30:00.000Z')
-    expect(doc.exifLat).toBeCloseTo(EXPECTED_LAT, 4)
-    expect(doc.exifLng).toBeCloseTo(EXPECTED_LNG, 4)
+    // Fix round 1 (M2): exifLat/exifLng are kurator/admin-only — the uploader's own mitglied
+    // response must NOT include them, even though it's their own upload (field access, not a
+    // document-ownership check).
+    expect(doc.exifLat).toBeUndefined()
+    expect(doc.exifLng).toBeUndefined()
+
+    const kuratorView = await fetchAsKurator(id)
+    expect(kuratorView.exifLat).toBeCloseTo(EXPECTED_LAT, 4)
+    expect(kuratorView.exifLng).toBeCloseTo(EXPECTED_LNG, 4)
   })
 
   it('user-provided year is kept as-is; EXIF fields are still stored alongside it', async () => {
     const res = await uploadFixture({ datePrecision: 'year', dateValue: '1975' })
     const json = (await res.json()) as { doc?: PhotoDoc; errors?: { message: string }[] }
     expect(res.status, JSON.stringify(json.errors)).toBe(201)
-    if (json.doc?.id) createdPhotoIds.push(json.doc.id)
+    const id = json.doc?.id as number
+    createdPhotoIds.push(id)
     const doc = json.doc as PhotoDoc
 
     // Never overrides human input.
@@ -102,7 +129,11 @@ describe('EXIF-on-upload prefill', () => {
     expect(doc.dateValue).toBe('1975')
     // But the raw capture info is always recorded — it's new data nobody could have hand-entered.
     expect(doc.exifTakenAt).toBe('2015-07-04T12:30:00.000Z')
-    expect(doc.exifLat).toBeCloseTo(EXPECTED_LAT, 4)
-    expect(doc.exifLng).toBeCloseTo(EXPECTED_LNG, 4)
+    expect(doc.exifLat).toBeUndefined()
+    expect(doc.exifLng).toBeUndefined()
+
+    const kuratorView = await fetchAsKurator(id)
+    expect(kuratorView.exifLat).toBeCloseTo(EXPECTED_LAT, 4)
+    expect(kuratorView.exifLng).toBeCloseTo(EXPECTED_LNG, 4)
   })
 })

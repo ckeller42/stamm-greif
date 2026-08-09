@@ -26,6 +26,25 @@ export interface IncomingDateFields {
   dateValue?: string | null
 }
 
+// Fix round 1 (M3): on a PARTIAL update (e.g. a REST PATCH that re-uploads a file alongside a
+// minimal `_payload` omitting datePrecision/dateValue entirely), Payload's incoming `data` only
+// carries the fields that request actually sent — datePrecision/dateValue come through as
+// `undefined`, not "unset". Resolving those against `originalDoc` first (same
+// data-present-else-fall-back-to-existing-doc pattern Photos.ts's sibling beforeChange hook
+// already uses for `people`) is what tells "nothing was ever set" (should fill) apart from
+// "already has a curator-set date, this request just didn't touch it" (must not fill). Only
+// meaningful for updates — `originalDoc` is undefined on create, where `data` alone is
+// authoritative.
+export function resolveIncomingDateFields(
+  data: IncomingDateFields,
+  originalDoc?: IncomingDateFields,
+): IncomingDateFields {
+  return {
+    datePrecision: data.datePrecision !== undefined ? data.datePrecision : originalDoc?.datePrecision,
+    dateValue: data.dateValue !== undefined ? data.dateValue : originalDoc?.dateValue,
+  }
+}
+
 export interface ExifFill {
   datePrecision?: 'exact'
   dateValue?: string
@@ -40,13 +59,28 @@ function isValidDate(d: unknown): d is Date {
 
 // EXIF GPS coordinates are stored as unsigned degrees/minutes/seconds plus a hemisphere ref
 // ('N'/'S' for latitude, 'E'/'W' for longitude) — the ref alone carries the sign. `negativeRef`
-// is which of the two ref letters means "negate" for the axis being converted.
-function dmsToSignedDecimal(dms: number[] | undefined, ref: string | undefined, negativeRef: string): number | undefined {
+// is which of the two ref letters means "negate" for the axis being converted. `maxAbs` is the
+// valid coordinate range for that axis (90 for latitude, 180 for longitude).
+//
+// Fix round 1 (L1): guards the RESULT, not just the raw `deg` input. exif-reader's rational
+// reader (numerator/denominator) returns `Infinity`/`NaN` for a zero-denominator rational
+// (`x/0`) rather than throwing — a malformed or adversarial EXIF blob could carry that in the
+// minutes/seconds component even when `deg` alone looks fine, and an out-of-range-but-finite
+// value (a corrupt tag, not just a divide-by-zero) is just as wrong. Either would otherwise
+// survive silently all the way into a Postgres `numeric` column.
+function dmsToSignedDecimal(
+  dms: number[] | undefined,
+  ref: string | undefined,
+  negativeRef: string,
+  maxAbs: number,
+): number | undefined {
   if (!dms || dms.length === 0) return undefined
   const [deg, min = 0, sec = 0] = dms
-  if (!Number.isFinite(deg)) return undefined
+  if (!Number.isFinite(deg) || !Number.isFinite(min) || !Number.isFinite(sec)) return undefined
   const decimal = deg + min / 60 + sec / 3600
-  return ref?.toUpperCase() === negativeRef ? -decimal : decimal
+  const signed = ref?.toUpperCase() === negativeRef ? -decimal : decimal
+  if (!Number.isFinite(signed) || Math.abs(signed) > maxAbs) return undefined
+  return signed
 }
 
 // NEVER overrides human input. `exifTakenAt`/`exifLat`/`exifLng` (raw capture info, powers a
@@ -74,9 +108,9 @@ export function computeExifFill(exif: ParsedExif | undefined, incoming: Incoming
     }
   }
 
-  const lat = dmsToSignedDecimal(exif.GPSInfo?.GPSLatitude, exif.GPSInfo?.GPSLatitudeRef, 'S')
+  const lat = dmsToSignedDecimal(exif.GPSInfo?.GPSLatitude, exif.GPSInfo?.GPSLatitudeRef, 'S', 90)
   if (lat !== undefined) fill.exifLat = lat
-  const lng = dmsToSignedDecimal(exif.GPSInfo?.GPSLongitude, exif.GPSInfo?.GPSLongitudeRef, 'W')
+  const lng = dmsToSignedDecimal(exif.GPSInfo?.GPSLongitude, exif.GPSInfo?.GPSLongitudeRef, 'W', 180)
   if (lng !== undefined) fill.exifLng = lng
 
   return fill
