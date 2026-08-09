@@ -178,7 +178,9 @@ praktische Auswirkung.
 
 ## Duplikaterkennung beim Hochladen
 
-Jedes hochgeladene Foto bekommt automatisch einen Perceptual Hash (dHash). Beim Erstellen eines
+Jedes hochgeladene Foto bekommt beim erfolgreichen Verarbeiten automatisch einen Perceptual Hash
+(dHash); schlägt die Bildverarbeitung fehl, wird der Upload nicht abgelehnt, das Foto hat dann
+aber keinen Hash und nimmt nicht an der Prüfung teil. Beim Erstellen eines
 neuen Fotos wird dieser Hash mit allen vorhandenen Fotos verglichen; liegt ein sehr ähnliches Foto
 vor (z. B. dasselbe Dia erneut gescannt oder anders exportiert), wird das neue Foto als
 **mögliches Duplikat markiert, aber nicht blockiert** — unterschiedliche Ausschnitte oder Scans

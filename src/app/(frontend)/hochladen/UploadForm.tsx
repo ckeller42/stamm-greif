@@ -63,6 +63,9 @@ export function UploadForm() {
     if (uploadingRef.current) return
     uploadingRef.current = true
     setUploading(true)
+    // A retry after a partial failure must not keep showing the previous attempt's completion
+    // message while the new uploads are still running.
+    setDone(false)
     try {
       for (const fs of files) {
         if (fs.status === 'fertig') continue
