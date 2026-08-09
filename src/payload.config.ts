@@ -19,6 +19,7 @@ import { Places } from './collections/Places'
 import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
 import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
+import { purgePapierkorbTask } from '@/jobs/purgePapierkorb'
 
 const filename = fileURLToPath(import.meta.url)
 const dirname = path.dirname(filename)
@@ -55,6 +56,18 @@ export default buildConfig({
   sharp,
   upload: { limits: { fileSize: 100 * 1024 * 1024 } }, // 100 MB (global constraint)
   plugins: [],
+  // 30-day Papierkorb auto-purge (spec §5). purgePapierkorbTask's own `schedule` is what
+  // enqueues the job daily at 04:00; `autoRun` here is the separate piece that actually runs
+  // whatever's sitting in the queue — see that task's top-of-file comment for the two-part
+  // reasoning (both verified against this version's payload.d.ts). Not gated behind
+  // NODE_ENV/similar: the int test (tests/int/papierkorb.int.test.ts) queues+runs the task
+  // directly rather than waiting on the cron, so this being always-on in every environment
+  // (including the vitest/int process, which does call getPayload()) is intentional, not an
+  // oversight — an idle daily cron with nothing due to purge is a no-op.
+  jobs: {
+    tasks: [purgePapierkorbTask],
+    autoRun: [{ cron: '0 4 * * *', queue: 'default' }],
+  },
   hooks: {
     afterError: [
       ({ error, req, result, collection }) => {
