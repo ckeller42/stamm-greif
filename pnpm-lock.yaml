@@ -29,6 +29,9 @@ importers:
       dotenv:
         specifier: 16.4.7
         version: 16.4.7
+      exif-reader:
+        specifier: ^2.0.3
+        version: 2.0.3
       graphql:
         specifier: ^16.8.1
         version: 16.14.2
@@ -2699,6 +2702,9 @@ packages:
   esutils@2.0.3:
     resolution: {integrity: sha512-kVscqXk4OCp68SZ0dkgEKVi6/8ij300KBWTJq32P/dYeWTSwK41WyTxalN1eRmA5Z9UU/LX9D7FWSmV9SAYx6g==}
     engines: {node: '>=0.10.0'}
+
+  exif-reader@2.0.3:
+    resolution: {integrity: sha512-zFbQvguwT9JkqyYhR7pjE1Yn8SagwaGLNRU0Oh14xFa1paSf5Gzxn4gxgk0XhnudI0UIqU+HgnBX93+nva592A==}
 
   expect-type@1.4.0:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
@@ -7252,6 +7258,8 @@ snapshots:
       '@types/estree': 1.0.9
 
   esutils@2.0.3: {}
+
+  exif-reader@2.0.3: {}
 
   expect-type@1.4.0: {}
 

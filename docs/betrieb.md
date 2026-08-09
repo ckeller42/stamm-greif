@@ -146,6 +146,36 @@ HTTP 200 (`status: "ok"`) wenn die App inklusive DB-Verbindung erreichbar ist, H
 (`status: "degraded"`) wenn die Datenbank nicht antwortet. Die Antwort enthält außerdem
 `errorsLastHour` (Anzahl Fehler der letzten Stunde) als groben Trend-Indikator.
 
+## Papierkorb (automatischer Purge nach 30 Tagen)
+
+Gelöschte Fotos landen zunächst im Papierkorb (`deletedAt` gesetzt, Kuratoren/Admin-Aktion) und
+bleiben dort 30 Tage sichtbar/wiederherstellbar. Danach werden sie **automatisch endgültig**
+gelöscht — DB-Eintrag und alle gespeicherten Dateien (Original + Vorschaubilder).
+
+Das läuft in-process über Payloads Jobs-System (`src/jobs/purgePapierkorb.ts`, verdrahtet in
+`payload.config.ts`) — kein separater Cron/Systemd-Timer auf dem Server nötig, das läuft mit im
+laufenden `app`-Container. Der Purge-Job wird täglich um 04:00 Uhr **eingeplant**; ausgeführt
+wird er beim nächsten 15-Minuten-Tick danach (spätestens ~04:15) — Einplanen (`schedule`) und
+Ausführen (`autoRun`, alle 15 Minuten) sind zwei getrennte Mechanismen in Payloads Jobs-System,
+nicht ein einzelner Lauf um 04:00 Uhr.
+
+**Prüfen, ob er läuft:** ein strukturierter Log-Eintrag mit `"msg":"papierkorb-purge"` erscheint
+täglich (auch wenn nichts zu löschen war, dann `"purgedCount":0`) — mit `docker compose logs app`
+suchen, oder gezielt:
+
+```sh
+docker compose logs app | grep papierkorb-purge
+```
+
+Ein Eintrag mit `"failedCount"` > 0 zeigt einzelne fehlgeschlagene Löschungen (z. B. Datei schon
+weg) — die zugehörigen Fehler stehen als separate `papierkorb-purge-errors`-Zeile direkt daneben.
+
+**Manuell anstoßen** (z. B. um nicht bis 04:00 Uhr zu warten): über die Payload Local API, etwa
+per `docker compose exec app node` mit einem kurzen Skript, das `payload.jobs.queue({ task:
+'purgePapierkorb', input: {} })` gefolgt von `payload.jobs.run()` aufruft — oder einfach bis zum
+nächsten planmäßigen Lauf warten, ein einzelner Tag Verzögerung hat bei einer 30-Tage-Frist keine
+praktische Auswirkung.
+
 ## Monitoring
 
 - **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200

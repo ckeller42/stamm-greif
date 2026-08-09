@@ -1,7 +1,53 @@
 import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 
-export function register(): void {
-  // nothing to set up — onRequestError below is the hook that matters
+export async function register(): Promise<void> {
+  // Fix round 1 (H5): Payload's job-system cron (jobs.autoRun — what actually triggers the
+  // daily Papierkorb purge, per src/jobs/purgePapierkorb.ts) only initializes on a
+  // `getPayload({ cron: true })` call (payload/dist/index.js's `_initializeCrons`, gated behind
+  // `options.cron`). Verified directly: only @payloadcms/next's own request-handling entry
+  // points (auth/login.js, utilities/initReq.js, etc.) ever pass `cron: true` — nothing else
+  // does, including this app's own frontend page renders. Payload caches its instance as a
+  // singleton per process, so whichever call happens to init it first wins; a freshly restarted
+  // container that receives zero admin/API traffic would otherwise never start the cron at all.
+  // `register()` is Next.js's dedicated "runs exactly once, at process boot, regardless of
+  // traffic" hook — this guarantees the cron starts on every boot.
+  //
+  // Guarded to the Node runtime: Next.js also compiles an Edge variant of this file (hence the
+  // pre-existing "Node.js module... not supported in Edge Runtime" build warning for
+  // `telemetry.ts`'s `crypto` import below) — Payload itself is Node-only (pg, crypto, fs), so
+  // this must not attempt to run there.
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    // Fix round 2 (BOOT HANG): Next.js awaits register() before serving ANY request — including
+    // /api/health — so an unbounded getPayload() call here doesn't just fail to start the cron
+    // on a stalled DB, it hangs the entire server at boot, forever. Same bounded-timeout shape
+    // src/app/api/health/route.ts already uses for its own DB check (Promise.race against a
+    // setTimeout that rejects, clearTimeout in finally so the timer can't outlive the attempt).
+    // On timeout or any other failure: log one line and CONTINUE — never throw out of register().
+    // Degraded, not broken: the cron simply stays unstarted until the first normal admin/API
+    // request comes in and initializes Payload itself via @payloadcms/next's own
+    // `cron: true` calls (see the big comment above) — this is a best-effort "start it as early
+    // as possible", not the only path to it ever starting.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        (async () => {
+          const [{ getPayload }, { default: config }] = await Promise.all([
+            import('payload'),
+            import('@payload-config'),
+          ])
+          await getPayload({ config, cron: true })
+        })(),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error('payload init timeout (boot cron)')), 5000)
+        }),
+      ])
+    } catch (err) {
+      const e = err instanceof Error ? err : new Error(String(err))
+      recordError({ errorId: newErrorId(), msg: e.message, stack: e.stack, source: 'instrumentation-register' })
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
+  }
 }
 
 // Next.js calls this for every unhandled server error (pages, route handlers, server actions).
