@@ -15,6 +15,13 @@
    archive is treated as covering the biometric processing derived from those photos, which is a
    broader reading of Art. 9 Abs. 2 lit. a than a dedicated opt-in would be — the mitigation is that
    withdrawal is immediate, total and irreversible (§7). A written DSFA remains recommended (§9).
+4. **Enable immediately on the owner's live instance.** `FACE_DETECTION_ENABLED` stays as an env
+   flag for engineering hygiene and as an operator kill switch, documented as `true` for this
+   deployment; the ship-dark-until-the-DSFA-exists posture stays in betrieb.md as the recommended
+   default for *other* deployments of this codebase.
+5. **Full backfill at enable.** The whole existing archive is processed once, as an admin-triggered
+   Payload job task — the same machinery the post-restore reconciliation needs, pointed at every
+   eligible published photo instead of at the hidden persons (§7, §11).
 
 **Phase:** P2.3, after P2.1 (EXIF/Papierkorb) and P2.2 (Duplikaterkennung).
 Everything marked *Empfehlung* is my recommendation and open to change.
@@ -42,8 +49,7 @@ Everything marked *Empfehlung* is my recommendation and open to change.
 **Non-goals (explicit):** auto-tagging without human confirmation · member-visible suggestions of any
 kind · the „Wer ist das?" crowd-ID workflow (scout-archive spec §5, *Later* tier) · age/gender/emotion
 inference (more Art.-9 data, zero benefit) · GPU · face *search* (already `photos.people`) ·
-retraining or fine-tuning any model · detection on drafts (§5) · retroactive backfill of the existing
-archive (§13 Q2).
+retraining or fine-tuning any model · detection on drafts (§5).
 
 ## 1. Engine choice
 
@@ -414,10 +420,12 @@ that up**, and betrieb.md must say so rather than imply a cleaner story than we 
 > „Gesichtsdaten aufräumen" laufen**, sonst leben die gelöschten Daten wieder.
 
 That last sentence is a real operational requirement, so it gets real machinery rather than a note: a
-task `reconcileHiddenPersons` (`slug: 'reconcileHiddenPersons'`, no schedule, admin-triggered through
-the already-admin-gated `POST /api/payload-jobs`) deletes `face-suggestions` rows for **every**
-person currently flagged `hidden`. It is idempotent, it is a no-op on a healthy system, and running
-it is a numbered step in the restore recipe in betrieb.md.
+task `reconcileHiddenFaceData` (no schedule, admin-triggered through the already-admin-gated
+`POST /api/payload-jobs`) deletes `face-suggestions` rows for **every** person currently flagged
+`hidden`. It is idempotent, it is a no-op on a healthy system, and running it is a numbered step in
+the restore recipe in betrieb.md. Its sibling `backfillFaces` is the same machinery aimed the other
+way — it walks every eligible published photo and enqueues `detectFaces` for it — and is what
+implements the owner's full-backfill decision (§11).
 
 **Irreversibility.** Un-setting `hidden` restores nothing. The person's future photos are simply
 tagged by hand again until a kurator confirms a new suggestion, which re-indexes them from scratch.
@@ -462,12 +470,18 @@ Written in that file's existing German, for the non-developer maintainers. Subst
 - **Art. 17 / Löschkonzept:** the triggers in §7, their irreversibility, and — plainly — the backup
   retention window and the post-restore step.
 - **Art. 30:** face detection is a separate Verarbeitungstätigkeit and belongs in the Verzeichnis —
-  purpose, legal basis, categories, retention.
+  purpose, legal basis, categories, retention. Note there explicitly that activation includes a
+  **one-off full backfill of the existing archive** (owner decision 5), so the processing covers
+  every already-published photo from day one, not only new uploads.
+- **Art. 5 Abs. 1 lit. e / Speicherbegrenzung:** the retention rules in §3 (rejected → embedding
+  deleted at once; open → embedding deleted after 180 days; confirmed → retained as the index) are
+  what keep the backfill from turning into an ever-growing pile of templates for people nobody ever
+  identified.
 - **Art. 35 Abs. 3 lit. b / DSK-Muss-Liste:** the German supervisory authorities' must-list names
   biometric identification. It is not exhaustive, and a small Verein is arguably not „umfangreich",
   but *biometrics + minors + a single consent boundary rather than a dedicated opt-in* makes a short
-  written **Datenschutz-Folgenabschätzung** the defensible choice. Recommendation, not a blocker;
-  see §13 Q1.
+  written **Datenschutz-Folgenabschätzung** the defensible choice — the more so now that activation
+  includes a full backfill. Advice, explicitly **not** a gate on enabling (owner decision 4).
 - **Model licence:** the InsightFace weights are „for non-commercial research purposes only", which a
   Verein archive satisfies. One sentence, so nobody later ships this into something commercial
   without noticing.
@@ -520,10 +534,19 @@ builds the image including the model stage and the face probe, so a broken model
 CI loudly instead of shipping quietly.
 
 Unlike rev. 1 there is nothing to switch on at the infrastructure level: once the image is deployed,
-the models are in it and the feature is live. `FACE_DETECTION_ENABLED=false` is the kill switch if the
-owner wants the code deployed but dormant while the DSFA question (§13 Q1) settles — *Empfehlung:*
-**ship with it `false` and flip it deliberately**, so „the code merged" and „the Verein started
-processing biometric data" are two separate, dated events.
+the models are in it and the feature is live. **Owner decision 4: it is enabled immediately on this
+instance** — `FACE_DETECTION_ENABLED` remains in the code as an operator kill switch and is
+documented as `true` here. betrieb.md still records the ship-dark posture (merge with the flag
+`false`, flip it once a DSFA exists) as the recommended default for *other* deployments of this
+codebase, which is a different situation from the owner's own live archive.
+
+**Owner decision 5: the full backfill runs at enable.** After the redeploy, an admin triggers
+`backfillFaces` once; it enqueues one `detectFaces` job per eligible published photo. The
+`faces` queue's `autoRun` entry carries a `limit`, so the backlog drains at a fixed, self-throttling
+rate rather than saturating the box — a few hundred photos an hour, which for this archive means the
+queue is empty within a day and no operator has to babysit it. Progress is observable in the logs
+(`msg: 'face-detect'` per photo, `msg: 'faces-backfill-enqueued'` with the total) and in the count of
+`offen` rows on `/gesichter`.
 
 New betrieb.md section **„Gesichtserkennung"**, slotted after „Duplikaterkennung beim Hochladen" and
 before „Monitoring", in the file's existing shape — copy-pasteable `sh` blocks, **bold** for the thing
@@ -535,9 +558,9 @@ plus the `faces` field on `/api/health`), and an explicit „Ein paar bewusste E
 - Löschen: what `hidden` destroys, that it is **irreversible**, the **backup-retention paragraph**
   from §7 verbatim, and „Gesichtsdaten aufräumen" (`reconcileHiddenPersons`) as a numbered step in the
   restore recipe.
-- Limits: only photos published *after* activation get suggestions — **no backfill of the existing
-  archive** (§13 Q2); suggestions are best-effort; a failed job is visible in the logs and just means
-  no suggestions for that photo; matching is a linear scan that wants `pgvector` beyond ~10 000
+- Aktivierung: the one-off `backfillFaces` run, what it costs, and how to watch it drain.
+- Limits: suggestions are best-effort; a failed job is visible in the logs and just means no
+  suggestions for that photo; matching is a linear scan that wants `pgvector` beyond ~10 000
   confirmed faces.
 - Resource note, deliberately short because it is now unremarkable: **no extra container, no RAM
   tier bump — the base stack's existing footprint plus roughly 200–300 MB while a face job runs.**
@@ -550,7 +573,7 @@ plus the `faces` field on `/api/health`), and an explicit „Ein paar bewusste E
 | Pure helpers | `src/lib/faces.ts` — `l2Normalise`, `cosineSimilarity`, `bestMatchPerPerson`, `normalizeBox`, `boxIoU`, `similarityTransform`, `roundEmbedding`, thresholds |
 | Model layer | `src/lib/face-model.ts` — ORT session cache, wasm path setup, letterboxing, stride decoding + NMS, 5-point alignment, `detectFaces()` / `embed()`. The only model-specific file. |
 | Collection | `src/collections/FaceSuggestions.ts` + the three endpoints; registered in `payload.config.ts` |
-| Jobs | `src/jobs/detectFaces.ts`, `src/jobs/reconcileHiddenPersons.ts`; `jobs.tasks` + the new `autoRun` entry in `payload.config.ts`; the 180-day sweep added to the existing purge task |
+| Jobs | `src/jobs/detectFaces.ts`, `src/jobs/faceMaintenance.ts` (`backfillFaces` + `reconcileHiddenFaceData`); `jobs.tasks` + the new `autoRun` entry (with `limit`) in `payload.config.ts`; the 180-day sweep added to the existing purge task |
 | Hooks | `src/collections/Photos.ts` (`enqueueFaceDetection` afterChange); `src/hooks/purge-face-data.ts` wired into `People` |
 | Frontend | `src/app/(frontend)/gesichter/page.tsx`, `.../gesichter/FaceReviewForm.tsx`; nav entry + `de.gesichter` in `src/messages/de.ts` |
 | Health | `src/app/api/health/route.ts` — informational `faces` field only |
@@ -560,23 +583,13 @@ plus the `faces` field on `/api/health`), and an explicit „Ein paar bewusste E
 | Tests | `tests/unit/faces.test.ts`, `tests/int/faces.int.test.ts`, `tests/fixtures/gesicht*.jpg` (public domain, attributed), additions to `tests/int/access.int.test.ts`; `package.json` `test:int`; CI model-fetch + cache step |
 | Migration | `src/migrations/YYYYMMDD_HHMMSS_face_suggestions.ts` + snapshot |
 
-## 13. Open questions for the owner
+## 13. Open questions for the owner — none
 
-Rev. 1's questions about a separate biometric opt-in and about ARM64/AVX are both closed — the first
-by owner decision, the second because a WASM engine has no architecture requirements at all. Two
-remain.
+All four are closed; recorded here so the reasoning survives.
 
-1. **Datenschutz-Folgenabschätzung.** Does the Verein want a short written DSFA before
-   `FACE_DETECTION_ENABLED` is ever flipped to `true`? Biometrics plus minors sits close enough to the
-   DSK must-list, and the decision to treat archive consent as covering biometric processing (rather
-   than collecting a dedicated opt-in) is exactly the kind of choice a DSFA exists to document.
-   *Empfehlung:* yes, a one-pager, and betrieb.md links it rather than restating it. This is why §11
-   recommends merging with the feature dormant.
-2. **Backfill of the existing archive — yes or no?** This design only processes photos published
-   after activation. With no external service and no per-photo cost worth mentioning, running the
-   detector over the whole existing archive is now technically trivial — which is precisely why it
-   needs a deliberate answer rather than a default: it would mean computing and storing biometric
-   templates for every person in every historical photo, including many children, in one batch. It is
-   a policy decision, not an engineering one. *Empfehlung:* **no backfill in this phase.** Let the
-   index grow from photos the Verein publishes going forward, revisit once the DSFA exists and the
-   threshold has been tuned on real data.
+| Question | Outcome |
+|---|---|
+| Separate biometric opt-in field (`gesichtserkennungErlaubt`)? | **Closed — no.** `people.hidden` stays the single consent boundary (owner decision 3). Trade-off and mitigation in the status block. |
+| ARM64 / AVX — where may the engine run? | **Closed — moot.** A WASM engine has no architecture requirement; the same image runs on the owner's Mac and on any x86 VPS, and the 4 GB tier bump rev. 1 needed is gone. |
+| Ship dark until a DSFA exists? | **Closed — enable immediately** on this instance (owner decision 4). `FACE_DETECTION_ENABLED` survives as an operator kill switch, and betrieb.md keeps the ship-dark posture as the recommendation for other deployments. The DSFA recommendation in §9 stands as advice, not a gate. |
+| Backfill the existing archive? | **Closed — yes, in full, at enable** (owner decision 5), via the admin-triggered `backfillFaces` task. §9's Verzeichnis paragraph names the resulting scope explicitly, and §3's retention rules are what stop it accumulating templates for people nobody identifies. |
