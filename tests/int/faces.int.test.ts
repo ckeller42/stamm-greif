@@ -226,7 +226,9 @@ describe('detection runs on publish, not on draft', () => {
     createdPhotoIds.push(photo.id)
     await runFacesQueue()
     const docs = await suggestionsFor(photo.id)
-    expect(docs.length).toBeGreaterThanOrEqual(1)
+    // gesicht-a.jpg has exactly one face — pinned here so the "asserted elsewhere in this file"
+    // comment on the concurrent-enqueues test below stays true.
+    expect(docs.length).toBe(1)
     const [s] = docs
     expect(s.status).toBe('offen')
     expect(Array.isArray(s.embedding)).toBe(true)
@@ -305,5 +307,46 @@ describe('embeddings identify the same person across photos', () => {
     const different = a.reduce((acc, v, i) => acc + v * c[i], 0)
     expect(same).toBeGreaterThan(different)
     expect(same).toBeGreaterThan(0.4)
+  })
+})
+
+describe('matching against confirmed faces', () => {
+  it('suggests the person on a second photo once the first is confirmed', async () => {
+    const person = await payload.create({
+      collection: 'people',
+      data: { name: `Testperson ${Date.now()}` },
+      overrideAccess: true,
+    })
+    const first = await payload.create({
+      collection: 'photos',
+      data: { caption: 'erstes', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(first.id)
+    await runFacesQueue()
+    const [firstRow] = await suggestionsFor(first.id)
+    // No index yet, so nothing can be suggested on the very first photo of a person.
+    expect(firstRow.suggestedPerson).toBeFalsy()
+
+    await payload.update({
+      collection: 'face-suggestions',
+      id: firstRow.id,
+      data: { status: 'bestaetigt', suggestedPerson: person.id },
+      overrideAccess: true,
+    })
+
+    const second = await payload.create({
+      collection: 'photos',
+      data: { caption: 'zweites', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-b.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(second.id)
+    await runFacesQueue()
+    const rows = await suggestionsFor(second.id)
+    const matched = rows.find((r) => String(r.suggestedPerson) === String(person.id))
+    expect(matched).toBeDefined()
+    expect(matched!.similarity).toBeGreaterThan(0.4)
   })
 })

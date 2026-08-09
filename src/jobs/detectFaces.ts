@@ -6,7 +6,16 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { TaskConfig, TaskHandler, PayloadRequest } from 'payload'
 import { analyseFaces, modelsPresent } from '@/lib/face-model'
-import { boxIoU, facesEnabled, IOU_DUPLICATE_THRESHOLD, normalizeBox, type Box } from '@/lib/faces'
+import {
+  bestMatchPerPerson,
+  boxIoU,
+  facesEnabled,
+  IOU_DUPLICATE_THRESHOLD,
+  normalizeBox,
+  similarityThreshold,
+  type Box,
+  type IndexedFace,
+} from '@/lib/faces'
 
 type DetectFacesIO = {
   input: { photoId: string | number }
@@ -105,10 +114,43 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
     xMin: d.boxXMin, yMin: d.boxYMin, xMax: d.boxXMax, yMax: d.boxYMax,
   }))
 
+  // The face index is derived, not stored separately: it is exactly the confirmed rows that
+  // still hold an embedding and name a person. `depth: 0` keeps the relationship as a bare id.
+  const confirmed = await req.payload.find({
+    collection: 'face-suggestions',
+    where: {
+      and: [
+        { status: { equals: 'bestaetigt' } },
+        { suggestedPerson: { exists: true } },
+        { embedding: { exists: true } },
+      ],
+    },
+    limit: 0,
+    pagination: false,
+    overrideAccess: true,
+    depth: 0,
+    req,
+  })
+  // Never index a person whose consent is withdrawn — belt and braces next to the purge hook.
+  const hiddenIds = new Set(
+    (
+      await req.payload.find({
+        collection: 'people',
+        where: { hidden: { equals: true } },
+        limit: 0, pagination: false, overrideAccess: true, depth: 0, req,
+      })
+    ).docs.map((p) => String(p.id)),
+  )
+  const index: IndexedFace[] = confirmed.docs
+    .filter((d) => d.suggestedPerson != null && !hiddenIds.has(String(d.suggestedPerson)))
+    .map((d) => ({ personId: d.suggestedPerson as number | string, embedding: d.embedding as number[] }))
+  const threshold = similarityThreshold()
+
   let suggestionCount = 0
   for (const face of faces) {
     const box = normalizeBox(face.box, width, height)
     if (decidedBoxes.some((b) => boxIoU(b, box) > IOU_DUPLICATE_THRESHOLD)) continue
+    const match = bestMatchPerPerson(face.embedding, index, threshold)
     await req.payload.create({
       collection: 'face-suggestions',
       data: {
@@ -123,6 +165,10 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
         status: 'offen',
         detectedAt: new Date().toISOString(),
         sourceVariant: resolved.variant,
+        // Same photo.id-cast reasoning as above: personId is IndexedFace's generic
+        // `number | string`, but Postgres-backed suggestedPerson only ever wants a number.
+        suggestedPerson: (match?.personId as number | undefined) ?? null,
+        similarity: match?.similarity ?? null,
       },
       overrideAccess: true,
       req,
