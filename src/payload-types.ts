@@ -225,6 +225,9 @@ export interface Photo {
   exifTakenAt?: string | null;
   exifLat?: number | null;
   exifLng?: number | null;
+  phash?: string | null;
+  duplicateOf?: (number | null) | Photo;
+  duplicateSuspected?: boolean | null;
   updatedAt: string;
   createdAt: string;
   _status?: ('draft' | 'published') | null;
@@ -728,6 +731,9 @@ export interface PhotosSelect<T extends boolean = true> {
   exifTakenAt?: T;
   exifLat?: T;
   exifLng?: T;
+  phash?: T;
+  duplicateOf?: T;
+  duplicateSuspected?: T;
   updatedAt?: T;
   createdAt?: T;
   _status?: T;

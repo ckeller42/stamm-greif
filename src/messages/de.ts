@@ -16,5 +16,6 @@ export const de = {
     success: 'Danke! Deine Fotos werden von einem Kurator geprüft und dann veröffentlicht.',
     error: 'Hochladen fehlgeschlagen — bitte erneut versuchen.',
     formats: 'JPEG, PNG, TIFF, WebP, HEIC oder HEIF — iPhone-Fotos werden jetzt direkt unterstützt und beim Hochladen automatisch in JPEG umgewandelt.',
+    duplicateWarning: 'Mögliches Duplikat eines vorhandenen Fotos',
     status: { wartet: 'wartet', laedt: 'lädt', fertig: 'fertig', fehler: 'fehler' } },
 } as const
