@@ -12,6 +12,14 @@ test.env
 /photos
 /media
 
+# Face-recognition models — fetched by scripts/fetch-face-models.sh, never part of the build
+# context. Without this, a developer who has run `pnpm faces:models` locally would silently leak
+# the real models into `COPY . .` in the `build` stage, defeating the facemodels stage entirely
+# and making the face probe pass even when the intended model-copy step is broken (confirmed:
+# this happened during Task 1 verification — removing the `COPY --from=facemodels` line still
+# produced a passing probe until this exclusion was added).
+/models
+
 # VCS / editor / tooling
 .git
 .gitignore
@@ -24,8 +32,10 @@ docs
 
 # Tests & coverage
 tests
-# ...except the real HEIC fixture the `run` stage's build-time decode probe needs (Dockerfile).
+# ...except the fixtures the build-time decode probes need (Dockerfile): the real HEIC fixture
+# for the `run` stage's HEIC probe, and the face fixture for the `build` stage's face probe.
 !tests/fixtures/dia.heic
+!tests/fixtures/gesicht-a.jpg
 coverage
 playwright-report
 test-results

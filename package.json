@@ -15,8 +15,9 @@
     "start": "cross-env NODE_OPTIONS=--no-deprecation next start",
     "test": "pnpm run test:unit && pnpm run test:int && pnpm run test:e2e",
     "test:unit": "vitest run tests/unit --coverage.enabled --coverage.include='src/lib/**'",
-    "test:int": "cross-env DATABASE_URI=postgres://archiv:archiv@localhost:5433/archiv_test vitest run tests/int --no-file-parallelism",
-    "test:e2e": "playwright test"
+    "test:int": "scripts/fetch-face-models.sh && cross-env DATABASE_URI=postgres://archiv:archiv@localhost:5433/archiv_test vitest run tests/int --no-file-parallelism",
+    "test:e2e": "playwright test",
+    "faces:models": "scripts/fetch-face-models.sh"
   },
   "dependencies": {
     "@payloadcms/db-postgres": "3.87.0",
@@ -29,6 +30,7 @@
     "exif-reader": "^2.0.3",
     "graphql": "^16.8.1",
     "next": "16.2.11",
+    "onnxruntime-web": "1.27.0",
     "payload": "3.87.0",
     "react": "19.2.6",
     "react-dom": "19.2.6",
