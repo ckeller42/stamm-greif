@@ -68,6 +68,14 @@ function isValidDate(d: unknown): d is Date {
 // minutes/seconds component even when `deg` alone looks fine, and an out-of-range-but-finite
 // value (a corrupt tag, not just a divide-by-zero) is just as wrong. Either would otherwise
 // survive silently all the way into a Postgres `numeric` column.
+//
+// CodeRabbit (PR #18): also validate each COMPONENT's own valid range, not just finiteness —
+// EXIF's DMS encoding is degrees/minutes/seconds where the sign lives entirely in the ref
+// (GPSLatitudeRef/GPSLongitudeRef), so `deg` itself is never negative, and minutes/seconds are
+// each a sexagesimal component (`0 <= x < 60`) by definition. A negative minutes/seconds value
+// (e.g. a corrupt or hand-crafted `[1, -30, 0]`) would previously still compute a plausible-
+// looking, in-range final decimal — passing the earlier finite/range check while being
+// structurally nonsense DMS input, not a real coordinate.
 function dmsToSignedDecimal(
   dms: number[] | undefined,
   ref: string | undefined,
@@ -77,6 +85,7 @@ function dmsToSignedDecimal(
   if (!dms || dms.length === 0) return undefined
   const [deg, min = 0, sec = 0] = dms
   if (!Number.isFinite(deg) || !Number.isFinite(min) || !Number.isFinite(sec)) return undefined
+  if (deg < 0 || min < 0 || min >= 60 || sec < 0 || sec >= 60) return undefined
   const decimal = deg + min / 60 + sec / 3600
   const signed = ref?.toUpperCase() === negativeRef ? -decimal : decimal
   if (!Number.isFinite(signed) || Math.abs(signed) > maxAbs) return undefined

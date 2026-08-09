@@ -287,32 +287,52 @@ export const Photos: CollectionConfig = {
     // sensible manual correction UI for either yet, and both are meant to reflect the file, not
     // curator input.
     //
-    // exifTakenAt stays open to any authenticated reader — a capture date carries roughly the
-    // same sensitivity as the fuzzy-date fields above, which already are.
+    // CodeRabbit (PR #18): admin.readOnly is UI-only — without `access.create`/`access.update`
+    // set to deny, an authenticated client could submit exifTakenAt/exifLat/exifLng directly in
+    // `_payload` on upload, and (for a file with no real EXIF) applyExifFill would never
+    // overwrite the spoofed value, so it would just persist as submitted.
+    //
+    // `access: { create: () => false, update: () => false }` mirrors the `uploader` field's
+    // existing pattern above and works for the same reason: verified directly against
+    // node_modules/payload/dist/collections/operations/create.js's operation order — field
+    // access is evaluated in the "beforeValidate - Fields" pass (fields/hooks/beforeValidate/
+    // promise.js: `if (!result) delete siblingData[field.name]`), which runs BEFORE "beforeChange
+    // - Collection" (where applyExifFill actually sets these fields from real EXIF data). So
+    // `access.create`/`update: () => false` strips a client's own directly-submitted value at
+    // that earlier gate, while applyExifFill's later hook-driven assignment is a completely
+    // separate write path that this gate has already finished running by the time it happens —
+    // never re-checked afterward. Confirmed empirically: tests/int/exif.int.test.ts's existing
+    // "prefilled from EXIF" cases still pass with this access block in place (the real value
+    // still gets stored), and the new spoof-attempt case (real fixture, no EXIF, `_payload`
+    // carries a forged exifLat) asserts the forged value is dropped, not stored.
+    // exifTakenAt stays read-open to any authenticated reader — a capture date carries roughly
+    // the same sensitivity as the fuzzy-date fields above, which already are; only its writes are
+    // now locked down.
     {
       name: 'exifTakenAt',
       type: 'date',
       label: 'Aufnahmedatum (EXIF)',
       admin: { readOnly: true, position: 'sidebar' },
+      access: { create: () => false, update: () => false },
     },
-    // Fix round 1 (M2): admin.readOnly is UI-only (same caveat as `uploader` above) — without a
-    // field-level `read` restriction, the raw API happily returns these to any authenticated
-    // mitglied. Unlike exifTakenAt, GPS coordinates from a modern phone upload are frequently a
-    // member's own home/street address, not just "when" but "where a specific device was" —
-    // read access is kurator/admin-only, same gate deletedAt's `update` already uses above.
+    // Fix round 1 (M2): GPS coordinates from a modern phone upload are frequently a member's own
+    // home/street address, not just "when" but "where a specific device was" — read access is
+    // kurator/admin-only, same gate deletedAt's `update` already uses above. Write access locked
+    // down too (see exifTakenAt's comment just above for why `create`/`update: () => false` is
+    // safe alongside applyExifFill's own writes).
     {
       name: 'exifLat',
       type: 'number',
       label: 'EXIF-Breitengrad',
       admin: { readOnly: true, position: 'sidebar' },
-      access: { read: isKuratorOrAdminField },
+      access: { read: isKuratorOrAdminField, create: () => false, update: () => false },
     },
     {
       name: 'exifLng',
       type: 'number',
       label: 'EXIF-Längengrad',
       admin: { readOnly: true, position: 'sidebar' },
-      access: { read: isKuratorOrAdminField },
+      access: { read: isKuratorOrAdminField, create: () => false, update: () => false },
     },
   ],
 }

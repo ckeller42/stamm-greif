@@ -154,8 +154,28 @@ const configPromise = buildConfig({
 // caller already accommodates (`getPayload({ config: await config })`).
 export default configPromise.then((config) => {
   const statsGlobal = config.globals.find((g) => g.slug === 'payload-jobs-stats')
-  if (statsGlobal) {
-    statsGlobal.access = { read: isAdmin, readVersions: isAdmin, update: isAdmin }
+  // CodeRabbit (PR #18): fail loudly, not silently, if the slug this lockdown targets ever
+  // stops existing — e.g. a future Payload minor renaming `payload-jobs-stats`, or restructuring
+  // how/whether it's auto-injected. Silently skipping would mean this access lockdown just
+  // quietly stops applying with no signal anywhere; the H2 int-test pin (tests/int/
+  // papierkorb.int.test.ts) only proves the CURRENT global is locked down, it can't prove some
+  // future global under a different name isn't wide open. Throwing at config-build time (boot,
+  // before the app ever serves a request) turns that into an immediate, unmissable failure
+  // instead of a silent security regression discovered later, if ever.
+  if (!statsGlobal) {
+    throw new Error(
+      "payload.config.ts: expected an auto-injected 'payload-jobs-stats' global after " +
+        'buildConfig() (this app enables jobs.tasks with a `schedule`, which sanitizeConfig is ' +
+        "expected to turn into jobs.stats=true and inject that global — see queues/config/" +
+        'global.js\'s getJobStatsGlobal and config/sanitize.js in payload@3.87.0), but it was ' +
+        'not found. This almost certainly means a Payload version change altered that behavior ' +
+        '(renamed the slug, stopped auto-injecting it, or similar) — the access lockdown just ' +
+        'below (fix round 1, H2) that depends on finding this exact global would otherwise ' +
+        'silently stop applying, leaving job-scheduling bookkeeping open to any authenticated ' +
+        'user. Find out what changed and update this code (and the slug check) accordingly ' +
+        'before deploying.',
+    )
   }
+  statsGlobal.access = { read: isAdmin, readVersions: isAdmin, update: isAdmin }
   return config
 })

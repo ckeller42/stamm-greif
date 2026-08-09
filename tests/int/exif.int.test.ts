@@ -63,14 +63,18 @@ async function loginCookie(email: string): Promise<string> {
   return res.headers.get('set-cookie') ?? ''
 }
 
-async function uploadFixture(payloadFields: Record<string, unknown>) {
+async function uploadFile(fixtureFile: string, payloadFields: Record<string, unknown>) {
   const cookie = await loginCookie(memberEmail)
   const body = new FormData()
-  const bytes = await readFile(path.resolve(process.cwd(), 'tests/fixtures/dia-exif.jpg'))
-  body.append('file', new Blob([bytes], { type: 'image/jpeg' }), 'dia-exif.jpg')
+  const bytes = await readFile(path.resolve(process.cwd(), 'tests/fixtures', fixtureFile))
+  body.append('file', new Blob([bytes], { type: 'image/jpeg' }), fixtureFile)
   body.append('_payload', JSON.stringify({ _status: 'draft', ...payloadFields }))
   const res = await fetch('http://localhost:3000/api/photos', { method: 'POST', headers: { cookie }, body })
   return res
+}
+
+async function uploadFixture(payloadFields: Record<string, unknown>) {
+  return uploadFile('dia-exif.jpg', payloadFields)
 }
 
 // Fix round 1 (M2): exifLat/exifLng are kurator/admin-only reads at the field-access level
@@ -135,5 +139,33 @@ describe('EXIF-on-upload prefill', () => {
     const kuratorView = await fetchAsKurator(id)
     expect(kuratorView.exifLat).toBeCloseTo(EXPECTED_LAT, 4)
     expect(kuratorView.exifLng).toBeCloseTo(EXPECTED_LNG, 4)
+  })
+
+  it('CodeRabbit (PR #18): a spoofed exifLat/exifLng/exifTakenAt in _payload is dropped, not stored', async () => {
+    // tests/fixtures/dia.jpg carries no EXIF at all (verified directly: sharp's own
+    // metadata().exif is undefined for it) — so applyExifFill never touches these fields on this
+    // upload, and the ONLY way they could end up populated is if a client's own directly-
+    // submitted `_payload` values were accepted. `access: { create: () => false, update: () =>
+    // false }` (Photos.ts) is what's meant to strip those before they ever reach storage.
+    const res = await uploadFile('dia.jpg', {
+      datePrecision: 'unknown',
+      exifLat: 12.3456,
+      exifLng: 65.4321,
+      exifTakenAt: '1999-01-01T00:00:00.000Z',
+    })
+    const json = (await res.json()) as { doc?: PhotoDoc; errors?: { message: string }[] }
+    expect(res.status, JSON.stringify(json.errors)).toBe(201)
+    const id = json.doc?.id as number
+    createdPhotoIds.push(id)
+
+    // A kurator re-fetch (not the mitglied uploader's own response) is the real proof here:
+    // exifLat/exifLng are field-access-hidden from a mitglied's own response regardless of
+    // whether they were ever stored (fix round 1, M2) — a kurator CAN see them, so a kurator
+    // response showing them null/absent proves the spoofed values were actually dropped
+    // server-side, not merely hidden from this particular reader.
+    const kuratorView = await fetchAsKurator(id)
+    expect(kuratorView.exifLat).toBeFalsy()
+    expect(kuratorView.exifLng).toBeFalsy()
+    expect(kuratorView.exifTakenAt).toBeFalsy()
   })
 })

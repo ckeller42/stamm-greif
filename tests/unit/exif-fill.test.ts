@@ -131,6 +131,35 @@ describe('computeExifFill', () => {
     expect(fill.exifLng).toBeUndefined()
   })
 
+  // CodeRabbit (PR #18): structurally invalid DMS components (negative minutes, or a
+  // minutes/seconds value >= 60) must be rejected even when the resulting decimal happens to
+  // land in-range and look plausible — the earlier finite/range-of-the-FINAL-value checks alone
+  // don't catch this, since a negative minutes component can still average out to something
+  // between -90 and 90.
+  it('negative minutes component -> omitted, not silently averaged into a plausible-looking decimal', () => {
+    const exif: ParsedExif = { GPSInfo: { GPSLatitude: [1, -30, 0], GPSLatitudeRef: 'N' } }
+    const fill = computeExifFill(exif, {})
+    expect(fill.exifLat).toBeUndefined()
+  })
+
+  it('minutes component >= 60 -> omitted', () => {
+    const exif: ParsedExif = { GPSInfo: { GPSLatitude: [1, 60, 0], GPSLatitudeRef: 'N' } }
+    const fill = computeExifFill(exif, {})
+    expect(fill.exifLat).toBeUndefined()
+  })
+
+  it('seconds component >= 60 -> omitted', () => {
+    const exif: ParsedExif = { GPSInfo: { GPSLongitude: [1, 0, 60], GPSLongitudeRef: 'E' } }
+    const fill = computeExifFill(exif, {})
+    expect(fill.exifLng).toBeUndefined()
+  })
+
+  it('negative degrees component -> omitted (sign belongs to the ref, never to deg itself)', () => {
+    const exif: ParsedExif = { GPSInfo: { GPSLatitude: [-1, 0, 0], GPSLatitudeRef: 'N' } }
+    const fill = computeExifFill(exif, {})
+    expect(fill.exifLat).toBeUndefined()
+  })
+
   it('boundary values (exactly 90 / 180) are kept, not treated as out-of-range', () => {
     const exif: ParsedExif = {
       GPSInfo: { GPSLatitude: [90, 0, 0], GPSLatitudeRef: 'N', GPSLongitude: [180, 0, 0], GPSLongitudeRef: 'E' },
