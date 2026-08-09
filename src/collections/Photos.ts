@@ -349,6 +349,42 @@ const clearDuplicateFlagsAfterDelete: CollectionAfterDeleteHook = async ({ req, 
   }
 }
 
+// P2.3 Task 6: belt-and-braces alongside the DB FK's `ON DELETE cascade` (hand-edited into the
+// face_suggestions migration — see that migration file's own comment). Payload's relationship
+// field config has no way to express "cascade" itself, only "set null" (its universal default),
+// so `pnpm payload migrate` (which replays the hand-edited SQL literally) is the only path that
+// ever produces the real cascade constraint. `pnpm dev`'s schema push instead diffs the live DB
+// directly against the config-derived schema — always "set null" for this field — and silently
+// reverts the constraint on every dev boot (confirmed directly: `\d face_suggestions` after a dev
+// boot shows `ON DELETE set null`, even immediately after a `migrate` that just set it to
+// `cascade`). Since `photo_id` is NOT NULL, hard-deleting a photo with any face-suggestions rows
+// under that reverted constraint throws a 23502 (not-null violation) — INSIDE the `DELETE FROM
+// photos` statement itself, since the FK action runs as part of that same SQL statement, before
+// Payload's JS-level `afterDelete` hooks ever get a chance to run. That rules out an afterDelete
+// cleanup (verified the hard way: adding one there still failed with the identical 23502 — the
+// delete never reaches JS at all). `beforeDelete` is what actually closes the gap: removing the
+// children first means there is nothing left for the (possibly-reverted) FK action to trip over
+// once the real `DELETE FROM photos` runs. A no-op whenever the real FK cascade would have done
+// the same work anyway (a `migrate`-only production deploy). Same non-fatal-degradation shape as
+// captureDuplicateReferencesBeforeDelete above: a failed cleanup here must not block the delete
+// the user actually asked for.
+const deleteFaceSuggestionsBeforePhotoDelete: CollectionBeforeDeleteHook = async ({ req, id }) => {
+  try {
+    await req.payload.delete({
+      collection: 'face-suggestions',
+      where: { photo: { equals: id } },
+      overrideAccess: true,
+      req,
+    })
+  } catch (err) {
+    req.payload.logger.info({
+      msg: 'face-suggestions-cleanup-skipped',
+      photoId: id,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 // Field-level access has a slightly different arg shape than collection-level Access (id can be
 // string | number), so `isKuratorOrAdmin` from access/roles doesn't structurally match here.
 const isKuratorOrAdminField: FieldAccess = ({ req }) =>
@@ -438,7 +474,7 @@ export const Photos: CollectionConfig = {
     // computePhashOnUpload must run AFTER convertHeicToJpeg (see its own comment above) — the
     // opposite ordering constraint from extractExifOnUpload, which must run BEFORE it.
     beforeOperation: [extractExifOnUpload, convertHeicToJpeg, computePhashOnUpload],
-    beforeDelete: [captureDuplicateReferencesBeforeDelete],
+    beforeDelete: [captureDuplicateReferencesBeforeDelete, deleteFaceSuggestionsBeforePhotoDelete],
     afterDelete: [clearDuplicateFlagsAfterDelete],
     // P2.3: face detection runs on the draft→published transition, never on a draft. Member
     // uploads land as drafts and a kurator may delete them unpublished; computing and STORING

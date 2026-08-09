@@ -189,7 +189,18 @@ describe.skipIf(!modelsPresent())('analyseFaces on real fixtures', () => {
 })
 
 async function runFacesQueue(): Promise<void> {
-  await payload.jobs.run({ queue: 'faces', overrideAccess: true })
+  // A single payload.jobs.run() call only processes up to its `limit` (default 10) per
+  // invocation — fine for most tests here, but Task 6's backfillFaces tests can leave dozens of
+  // jobs queued at once (backfillFacesHandler enqueues for every eligible published photo in the
+  // whole test database, not just this file's own), and a freshly-enqueued job can land well
+  // behind that backlog in FIFO order. Loop until Payload itself reports nothing left rather than
+  // assume one call reaches the job a given test actually cares about.
+  let result = await payload.jobs.run({ queue: 'faces', overrideAccess: true })
+  let iterations = 0
+  while (!result.noJobsRemaining && iterations < 50) {
+    result = await payload.jobs.run({ queue: 'faces', overrideAccess: true })
+    iterations++
+  }
 }
 
 async function suggestionsFor(photoId: string | number) {
@@ -438,5 +449,297 @@ describe('matching against confirmed faces', () => {
     const matched = rows.find((r) => String(r.suggestedPerson) === String(person.id))
     expect(matched).toBeDefined()
     expect(matched!.similarity).toBeGreaterThan(0.4)
+  })
+
+  // GDPR-critical regression test carried over from Task 4's review: match-time exclusion. A
+  // person's consent can be withdrawn (`hidden: true`) in the window between their face being
+  // confirmed on one photo and a second, later photo of the same face being processed — this
+  // pins that the second photo's detectFaces run never re-surfaces the withdrawn person as a
+  // suggestion, whether that's because purgeFaceDataForHiddenPerson already removed the
+  // confirmed row the match would have been built from, or because of detectFacesHandler's own
+  // belt-and-braces hiddenIds filter (src/jobs/detectFaces.ts) — either mechanism satisfies the
+  // one thing that actually matters here: consent withdrawal must never come apart from match
+  // exclusion.
+  it('a hidden person is never re-suggested on a later photo of the same face', async () => {
+    const person = await payload.create({
+      collection: 'people',
+      data: { name: `Widerrufen ${Date.now()}` },
+      overrideAccess: true,
+    })
+    const first = await payload.create({
+      collection: 'photos',
+      data: { caption: 'widerrufen-erstes', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(first.id)
+    await runFacesQueue()
+    const [firstRow] = await suggestionsFor(first.id)
+    await payload.update({
+      collection: 'face-suggestions',
+      id: firstRow.id,
+      data: { status: 'bestaetigt', suggestedPerson: person.id },
+      overrideAccess: true,
+    })
+
+    // Consent withdrawn between the first confirmation and the second photo being processed.
+    await payload.update({
+      collection: 'people', id: person.id, data: { hidden: true }, overrideAccess: true,
+    })
+
+    const second = await payload.create({
+      collection: 'photos',
+      data: { caption: 'widerrufen-zweites', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-b.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(second.id)
+    await runFacesQueue()
+    const rows = await suggestionsFor(second.id)
+    expect(rows.every((r) => String(r.suggestedPerson) !== String(person.id))).toBe(true)
+  })
+})
+
+describe('consent purge and delete cascade', () => {
+  it('hiding a person deletes every face-suggestions row naming them', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `Purge ${Date.now()}` }, overrideAccess: true,
+    })
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'purge', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+    await payload.update({
+      collection: 'face-suggestions', id: row.id,
+      data: { status: 'bestaetigt', suggestedPerson: person.id }, overrideAccess: true,
+    })
+    // present before, so the assertion after cannot pass vacuously
+    expect(
+      (await payload.find({
+        collection: 'face-suggestions',
+        where: { suggestedPerson: { equals: person.id } },
+        overrideAccess: true, pagination: false,
+      })).docs.length,
+    ).toBe(1)
+
+    await payload.update({
+      collection: 'people', id: person.id, data: { hidden: true }, overrideAccess: true,
+    })
+    expect(
+      (await payload.find({
+        collection: 'face-suggestions',
+        where: { suggestedPerson: { equals: person.id } },
+        overrideAccess: true, pagination: false,
+      })).docs.length,
+    ).toBe(0)
+  })
+
+  it('hard-deleting a photo removes its suggestions via the FK cascade', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'cascade', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-b.jpg',
+      overrideAccess: true,
+    })
+    await runFacesQueue()
+    expect((await suggestionsFor(photo.id)).length).toBeGreaterThanOrEqual(1)
+    await payload.delete({ collection: 'photos', id: photo.id, overrideAccess: true })
+    expect(await suggestionsFor(photo.id)).toHaveLength(0)
+  })
+
+  it('reconcileHiddenFaceData cleans up rows a restore would have resurrected', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `Restore ${Date.now()}`, hidden: true }, overrideAccess: true,
+    })
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'restore', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-c.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+    // simulate a restored backup: a row naming an already-hidden person
+    await payload.update({
+      collection: 'face-suggestions', id: row.id,
+      data: { status: 'bestaetigt', suggestedPerson: person.id }, overrideAccess: true,
+    })
+    await payload.jobs.queue({ task: 'reconcileHiddenFaceData', input: {} })
+    await payload.jobs.run({ overrideAccess: true })
+    expect(
+      (await payload.find({
+        collection: 'face-suggestions',
+        where: { suggestedPerson: { equals: person.id } },
+        overrideAccess: true, pagination: false,
+      })).docs.length,
+    ).toBe(0)
+  })
+})
+
+describe('backfillFaces task', () => {
+  it(
+    'picks up a photo whose publish-time enqueue was skipped (published + binned in one ' +
+      'call, later restored)',
+    async () => {
+      const photo = await payload.create({
+        collection: 'photos',
+        data: {
+          caption: 'binned-at-birth', datePrecision: 'unknown',
+          _status: 'published', deletedAt: new Date().toISOString(),
+        },
+        filePath: 'tests/fixtures/gesicht-a.jpg',
+        overrideAccess: true,
+      })
+      createdPhotoIds.push(photo.id)
+      await runFacesQueue()
+      // publish-time enqueue was skipped: Photos' afterChange hook bails on `doc.deletedAt`.
+      expect(await suggestionsFor(photo.id)).toHaveLength(0)
+
+      // Restore: clearing deletedAt does NOT re-trigger the publish-transition enqueue (the
+      // photo was already `_status: 'published'` before this update, and the filename didn't
+      // change) — without a backfill run this photo would sit forever with no suggestions.
+      await payload.update({
+        collection: 'photos', id: photo.id, data: { deletedAt: null }, overrideAccess: true,
+      })
+      await runFacesQueue()
+      expect(await suggestionsFor(photo.id)).toHaveLength(0)
+
+      await payload.jobs.queue({ task: 'backfillFaces', input: {} })
+      await payload.jobs.run({ overrideAccess: true })
+      await runFacesQueue()
+
+      expect((await suggestionsFor(photo.id)).length).toBeGreaterThanOrEqual(1)
+    },
+  )
+
+  it(
+    'picks up a photo published with a hidden person tagged in one call, later untagged',
+    async () => {
+      const person = await payload.create({
+        collection: 'people',
+        data: { name: `Backfill-Hidden ${Date.now()}`, hidden: true },
+        overrideAccess: true,
+      })
+      const photo = await payload.create({
+        collection: 'photos',
+        data: {
+          caption: 'hidden-at-birth', datePrecision: 'unknown', _status: 'published',
+          people: [person.id],
+        },
+        filePath: 'tests/fixtures/gesicht-b.jpg',
+        overrideAccess: true,
+      })
+      createdPhotoIds.push(photo.id)
+      const created = await payload.findByID({
+        collection: 'photos', id: photo.id, overrideAccess: true, depth: 0,
+      })
+      expect(created.hasHiddenPerson).toBe(true)
+      await runFacesQueue()
+      // publish-time enqueue was skipped: Photos' afterChange hook bails on `doc.hasHiddenPerson`.
+      expect(await suggestionsFor(photo.id)).toHaveLength(0)
+
+      // Untag the hidden person: hasHiddenPerson recomputes to false, but this is neither a
+      // draft->published transition nor a file change, so the publish-time hook still doesn't
+      // re-enqueue.
+      await payload.update({
+        collection: 'photos', id: photo.id, data: { people: [] }, overrideAccess: true,
+      })
+      const untagged = await payload.findByID({
+        collection: 'photos', id: photo.id, overrideAccess: true, depth: 0,
+      })
+      expect(untagged.hasHiddenPerson).toBe(false)
+      await runFacesQueue()
+      expect(await suggestionsFor(photo.id)).toHaveLength(0)
+
+      await payload.jobs.queue({ task: 'backfillFaces', input: {} })
+      await payload.jobs.run({ overrideAccess: true })
+      await runFacesQueue()
+
+      expect((await suggestionsFor(photo.id)).length).toBeGreaterThanOrEqual(1)
+    },
+  )
+
+  it(
+    're-run semantics: backfilling a photo that already has a decided suggestion leaves it ' +
+      'untouched and does not duplicate it',
+    async () => {
+      const photo = await payload.create({
+        collection: 'photos',
+        data: { caption: 're-run', datePrecision: 'unknown', _status: 'published' },
+        filePath: 'tests/fixtures/gesicht-a.jpg',
+        overrideAccess: true,
+      })
+      createdPhotoIds.push(photo.id)
+      await runFacesQueue()
+      const [row] = await suggestionsFor(photo.id)
+      await payload.update({
+        collection: 'face-suggestions', id: row.id,
+        data: { status: 'abgelehnt', embedding: null }, overrideAccess: true,
+      })
+
+      await payload.jobs.queue({ task: 'backfillFaces', input: {} })
+      await payload.jobs.run({ overrideAccess: true })
+      await runFacesQueue()
+
+      const docs = await suggestionsFor(photo.id)
+      // gesicht-a.jpg has exactly one face (pinned earlier in this file) — the decided
+      // (abgelehnt) row survives untouched, and detectFacesHandler's own IoU-suppression against
+      // decided boxes stops the re-run from resurrecting a fresh 'offen' row on the same face.
+      expect(docs.length).toBe(1)
+      expect(docs[0].id).toBe(row.id)
+      expect(docs[0].status).toBe('abgelehnt')
+    },
+  )
+})
+
+describe('180-day stale-offen sweep (purgePapierkorb)', () => {
+  it('expires an offen suggestion detected more than 180 days ago, leaves a recent one alone', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'stale-sweep', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-c.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+
+    const staleDetectedAt = new Date(Date.now() - 181 * 24 * 60 * 60 * 1000).toISOString()
+    await payload.update({
+      collection: 'face-suggestions', id: row.id,
+      data: { detectedAt: staleDetectedAt }, overrideAccess: true,
+    })
+    // second, recent row on the same photo to confirm the sweep is selective, not blanket
+    const recent = await payload.create({
+      collection: 'face-suggestions',
+      data: {
+        photo: photo.id,
+        boxXMin: 0.5, boxYMin: 0.5, boxXMax: 0.9, boxYMax: 0.9,
+        embedding: [0.1, 0.2, 0.3],
+        status: 'offen',
+        detectedAt: new Date().toISOString(),
+      },
+      overrideAccess: true,
+    })
+
+    await payload.jobs.queue({ task: 'purgePapierkorb', input: {}, overrideAccess: true })
+    await payload.jobs.run({ queue: 'default', overrideAccess: true })
+
+    const staleReloaded = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0,
+    })
+    expect(staleReloaded.status).toBe('abgelehnt')
+    expect(staleReloaded.embedding).toBeFalsy()
+
+    const recentReloaded = await payload.findByID({
+      collection: 'face-suggestions', id: recent.id, overrideAccess: true, depth: 0,
+    })
+    expect(recentReloaded.status).toBe('offen')
   })
 })

@@ -22,6 +22,7 @@ import { Users } from './collections/Users'
 import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 import { purgePapierkorbTask } from '@/jobs/purgePapierkorb'
 import { detectFacesTask } from '@/jobs/detectFaces'
+import { backfillFacesTask, reconcileHiddenFaceDataTask } from '@/jobs/faceMaintenance'
 import { isAdmin } from '@/access/roles'
 
 // Fix round 1 (H2): every jobs.access.* callback (run/queue/cancel) has the same `{ req }` arg
@@ -73,7 +74,30 @@ const configPromise = buildConfig({
   // does call getPayload()) is intentional, not an oversight — an idle daily cron with nothing
   // due to purge is a no-op.
   jobs: {
-    tasks: [purgePapierkorbTask, detectFacesTask],
+    // backfillFaces / reconcileHiddenFaceData (P2.3 Task 6): admin-triggered only, no `schedule`
+    // — they're queued on demand via POST /api/payload-jobs (admin-only, jobsCollectionOverrides
+    // below) rather than on a cron.
+    tasks: [purgePapierkorbTask, detectFacesTask, backfillFacesTask, reconcileHiddenFaceDataTask],
+    // P2.3 Task 6, confirmed the hard way: Task 3's round-2 report already named the mechanism
+    // ("New finding while re-running the full gate...") and flagged this as the cheap mitigation
+    // to reach for if a future task's heavier queue traffic ever made it frequent enough to
+    // matter — backfillFaces (this task) is exactly that. Reproduced directly while running this
+    // task's own gate: backfillFaces enqueuing detectFaces for every eligible photo made the
+    // `faces` queue busy enough that the live `pnpm dev` server's own `autoRun` tick collided
+    // with this suite's explicit `payload.jobs.run()` calls — Postgres `deadlock detected`
+    // between `payload_jobs`' default on-complete bulk DELETE and a per-job completion UPDATE
+    // (confirmed via `pg_stat_activity`: rows stuck `idle in transaction (aborted)`, DDL from a
+    // later test file's own schema push queued behind them, and every request sharing that dev
+    // server's connection pool — including plain logins — stalling for minutes). The aborted side
+    // of the deadlock never got rolled back client-side, permanently leaking a pool slot; enough
+    // collisions exhausts the whole pool. `deleteJobOnComplete: false` removes one side of the
+    // conflict (no more bulk DELETE competing with the UPDATE) — verified this closes it: the
+    // full gate re-run after setting it produced zero deadlocks/aborted-transaction stalls over
+    // the same workload that reliably wedged the pool without it. Tradeoff, same as Task 3 named
+    // it: `payload_jobs`/`payload_jobs_log` rows now accumulate indefinitely (no existing cleanup
+    // task) instead of being deleted on success — worth a follow-up task if the table's growth
+    // ever becomes its own operational concern; out of scope here.
+    deleteJobOnComplete: false,
     // P2.3 review (Task 3, round 2): two enqueues for the same photo close together (publish,
     // then a quick file-replace before the first job has run) land as two separate rows in
     // `payload_jobs`. Without this, `runJobs`' `Promise.all` batch (queues/operations/runJobs/

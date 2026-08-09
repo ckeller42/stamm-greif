@@ -124,6 +124,8 @@ export interface Config {
     tasks: {
       purgePapierkorb: TaskPurgePapierkorb;
       detectFaces: TaskDetectFaces;
+      backfillFaces: TaskBackfillFaces;
+      reconcileHiddenFaceData: TaskReconcileHiddenFaceData;
       inline: {
         input: unknown;
         output: unknown;
@@ -470,7 +472,7 @@ export interface PayloadJob {
     | {
         executedAt: string;
         completedAt: string;
-        taskSlug: 'inline' | 'purgePapierkorb' | 'detectFaces';
+        taskSlug: 'inline' | 'purgePapierkorb' | 'detectFaces' | 'backfillFaces' | 'reconcileHiddenFaceData';
         taskID: string;
         input?:
           | {
@@ -503,7 +505,7 @@ export interface PayloadJob {
         id?: string | null;
       }[]
     | null;
-  taskSlug?: ('inline' | 'purgePapierkorb' | 'detectFaces') | null;
+  taskSlug?: ('inline' | 'purgePapierkorb' | 'detectFaces' | 'backfillFaces' | 'reconcileHiddenFaceData') | null;
   queue?: string | null;
   waitUntil?: string | null;
   processing?: boolean | null;
@@ -959,6 +961,22 @@ export interface TaskPurgePapierkorb {
  * via the `definition` "TaskDetectFaces".
  */
 export interface TaskDetectFaces {
+  input?: unknown;
+  output?: unknown;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskBackfillFaces".
+ */
+export interface TaskBackfillFaces {
+  input?: unknown;
+  output?: unknown;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskReconcileHiddenFaceData".
+ */
+export interface TaskReconcileHiddenFaceData {
   input?: unknown;
   output?: unknown;
 }

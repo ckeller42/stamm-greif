@@ -5,6 +5,7 @@ import {
   captureHiddenPhotosBeforePersonDelete,
   recomputeHiddenPhotosAfterPersonDelete,
 } from '@/hooks/sync-hidden-photos'
+import { purgeFaceDataForHiddenPerson, purgeFaceDataForDeletedPerson } from '@/hooks/purge-face-data'
 
 export const People: CollectionConfig = {
   slug: 'people',
@@ -12,9 +13,11 @@ export const People: CollectionConfig = {
   admin: { useAsTitle: 'name', group: 'Archiv' },
   access: { read: authenticated, create: isKuratorOrAdmin, update: isKuratorOrAdmin, delete: isAdmin },
   hooks: {
-    afterChange: [syncHiddenPhotos],
+    // P2.3: order matters — photo visibility (syncHiddenPhotos) is the correctness-critical part
+    // and runs first; face-data purge is the consent-boundary cleanup that follows it.
+    afterChange: [syncHiddenPhotos, purgeFaceDataForHiddenPerson],
     beforeDelete: [captureHiddenPhotosBeforePersonDelete],
-    afterDelete: [recomputeHiddenPhotosAfterPersonDelete],
+    afterDelete: [recomputeHiddenPhotosAfterPersonDelete, purgeFaceDataForDeletedPerson],
   },
   fields: [
     { name: 'name', type: 'text', required: true, label: 'Name' },

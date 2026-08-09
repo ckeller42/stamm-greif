@@ -114,6 +114,23 @@ export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ r
     }
   }
 
+  // Speicherbegrenzung (Art. 5 Abs. 1 lit. e): an `offen` suggestion nobody ever reviewed is a
+  // biometric template for an unidentified person. After 180 days it loses the template and
+  // becomes a tombstone, which still stops a re-run resurrecting the same box.
+  const staleCutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString()
+  const stale = await req.payload.update({
+    collection: 'face-suggestions',
+    where: {
+      and: [{ status: { equals: 'offen' } }, { detectedAt: { less_than: staleCutoff } }],
+    },
+    data: { status: 'abgelehnt', embedding: null },
+    overrideAccess: true,
+    req,
+  })
+  if (stale.docs.length > 0) {
+    req.payload.logger.info({ msg: 'face-suggestions-expired', expired: stale.docs.length })
+  }
+
   // One structured line per run, always — including the (expected, most days) zero-purged case,
   // so "the purge job is alive and ran" is itself observable from the logs, not just "it deleted
   // something."
