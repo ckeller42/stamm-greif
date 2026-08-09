@@ -78,6 +78,7 @@ export interface Config {
     tags: Tag;
     attendance: Attendance;
     photos: Photo;
+    'face-suggestions': FaceSuggestion;
     'payload-kv': PayloadKv;
     'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
@@ -97,6 +98,7 @@ export interface Config {
     tags: TagsSelect<false> | TagsSelect<true>;
     attendance: AttendanceSelect<false> | AttendanceSelect<true>;
     photos: PhotosSelect<false> | PhotosSelect<true>;
+    'face-suggestions': FaceSuggestionsSelect<false> | FaceSuggestionsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -369,6 +371,37 @@ export interface Attendance {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "face-suggestions".
+ */
+export interface FaceSuggestion {
+  id: number;
+  photo: number | Photo;
+  boxXMin: number;
+  boxYMin: number;
+  boxXMax: number;
+  boxYMax: number;
+  boxProbability?: number | null;
+  embedding?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  suggestedPerson?: (number | null) | Person;
+  similarity?: number | null;
+  status: 'offen' | 'bestaetigt' | 'abgelehnt';
+  confirmedBy?: (number | null) | User;
+  confirmedAt?: string | null;
+  detectedAt?: string | null;
+  sourceVariant?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -535,6 +568,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'photos';
         value: number | Photo;
+      } | null)
+    | ({
+        relationTo: 'face-suggestions';
+        value: number | FaceSuggestion;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -770,6 +807,28 @@ export interface PhotosSelect<T extends boolean = true> {
               filename?: T;
             };
       };
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "face-suggestions_select".
+ */
+export interface FaceSuggestionsSelect<T extends boolean = true> {
+  photo?: T;
+  boxXMin?: T;
+  boxYMin?: T;
+  boxXMax?: T;
+  boxYMax?: T;
+  boxProbability?: T;
+  embedding?: T;
+  suggestedPerson?: T;
+  similarity?: T;
+  status?: T;
+  confirmedBy?: T;
+  confirmedAt?: T;
+  detectedAt?: T;
+  sourceVariant?: T;
+  updatedAt?: T;
+  createdAt?: T;
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
