@@ -176,6 +176,38 @@ per `docker compose exec app node` mit einem kurzen Skript, das `payload.jobs.qu
 nächsten planmäßigen Lauf warten, ein einzelner Tag Verzögerung hat bei einer 30-Tage-Frist keine
 praktische Auswirkung.
 
+## Duplikaterkennung beim Hochladen
+
+Jedes hochgeladene Foto bekommt beim erfolgreichen Verarbeiten automatisch einen Perceptual Hash
+(dHash); schlägt die Bildverarbeitung fehl, wird der Upload nicht abgelehnt, das Foto hat dann
+aber keinen Hash und nimmt nicht an der Prüfung teil. Beim Erstellen eines
+neuen Fotos wird dieser Hash mit allen vorhandenen Fotos verglichen; liegt ein sehr ähnliches Foto
+vor (z. B. dasselbe Dia erneut gescannt oder anders exportiert), wird das neue Foto als
+**mögliches Duplikat markiert, aber nicht blockiert** — unterschiedliche Ausschnitte oder Scans
+desselben Motivs sollen weiterhin hochgeladen werden können. Kuratoren sehen in der
+Foto-Übersicht im Admin-Bereich den Verweis auf das vermutlich identische Foto (`duplicateOf`) und
+können selbst entscheiden, ob es sich tatsächlich um ein Duplikat handelt. Mitglieder sehen im
+Upload-Formular nur einen allgemeinen Hinweis, ohne Details zum vorhandenen Foto preiszugeben.
+
+Die Prüfung läuft nur beim **Erstellen** eines neuen Fotos, nicht bei späteren Bearbeitungen: wird
+ein fälschlich markiertes Foto erneut hochgeladen, um die Markierung loszuwerden, bleibt
+`duplicateOf`/`duplicateSuspected` des ursprünglichen Eintrags bestehen — die Markierung muss in
+diesem Fall manuell im Admin-Bereich entfernt werden.
+
+Ein paar bewusste Einschränkungen:
+
+- Die Prüfung läuft absichtlich über **alle** vorhandenen Fotos, auch verborgene, im Papierkorb
+  liegende oder unveröffentlichte — nur so fällt in der Moderation auf, wenn jemand die Kopie eines
+  bereits zurückgezogenen Fotos erneut hochlädt.
+- Fotos aus der Zeit **vor** diesem Feature haben keinen Perceptual Hash und nehmen an der Prüfung
+  nicht teil (weder als neu zu prüfendes Foto noch als möglicher Treffer für andere). Ein
+  nachträgliches Backfill-Skript für den Altbestand ist ein mögliches späteres Follow-up, aber noch
+  nicht umgesetzt.
+- Die Markierung ist **Best-Effort**, kein exakter Abgleich: sie läuft nur beim Erstellen (siehe
+  oben) und vergleicht gegen den zum jeweiligen Zeitpunkt vorhandenen Bestand — zwei nahezu
+  gleichzeitige Uploads desselben Fotos können sich dadurch gegenseitig verpassen, wenn der zweite
+  Upload bereits läuft, bevor der erste vollständig gespeichert ist.
+
 ## Monitoring
 
 - **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200
