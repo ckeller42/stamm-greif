@@ -25,10 +25,20 @@ jobs:
     env:
       PAYLOAD_SECRET: ci-not-a-real-secret
       NEXT_TELEMETRY_DISABLED: '1'
+      FACE_MODELS_DIR: models/faces
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup
+
+      - name: Cache face models
+        uses: actions/cache@v4
+        with:
+          path: models/faces
+          key: face-models-${{ hashFiles('scripts/fetch-face-models.sh') }}
+
+      - name: Fetch face models
+        run: scripts/fetch-face-models.sh
 
       - name: Start test database
         run: docker compose -f docker-compose.dev.yml up -d db-test

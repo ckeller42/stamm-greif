@@ -32,6 +32,10 @@ let adminEmail: string
 // their photo (photo_id FK is ON DELETE cascade, see the face_suggestions migration), so deleting
 // the photo is sufficient.
 const createdPhotoIds: (string | number)[] = []
+// People created directly (not via a photo/suggestion flow) that this suite must clean up itself
+// — Task 6 review carry-over: the ForceFail and BulkEdit tests below create a person but never
+// confirm/hide/delete it, so without this they leak a row per CI run.
+const createdPersonIds: (string | number)[] = []
 
 beforeAll(async () => {
   payload = await getPayload({ config: await config })
@@ -74,6 +78,9 @@ afterAll(async () => {
       overrideAccess: true,
     })
     await payload.delete({ collection: 'photos', where: { id: { in: createdPhotoIds } }, overrideAccess: true })
+  }
+  if (createdPersonIds.length) {
+    await payload.delete({ collection: 'people', where: { id: { in: createdPersonIds } }, overrideAccess: true })
   }
 })
 
@@ -643,6 +650,7 @@ describe('a forced purge failure rolls back the hidden flag, not just skips the 
     const person = await payload.create({
       collection: 'people', data: { name: `ForceFail ${Date.now()}` }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     process.env.FACES_TEST_FORCE_PURGE_FAILURE = '1'
     try {
       await expect(
@@ -675,6 +683,7 @@ describe('People bulk edit is disabled (C2)', () => {
     const person = await payload.create({
       collection: 'people', data: { name: `BulkEdit ${Date.now()}` }, overrideAccess: true,
     })
+    createdPersonIds.push(person.id)
     const cookie = await loginCookie(kuratorEmail)
     const res = await fetch(`http://localhost:3000/api/people?where[id][equals]=${person.id}`, {
       method: 'PATCH',
@@ -892,5 +901,15 @@ describe('180-day stale-offen sweep (purgePapierkorb)', () => {
       collection: 'face-suggestions', id: recent.id, overrideAccess: true, depth: 0,
     })
     expect(recentReloaded.status).toBe('offen')
+  })
+})
+
+describe('health reports face readiness without affecting status', () => {
+  it('answers 200 and includes the faces field', async () => {
+    const res = await fetch('http://localhost:3000/api/health')
+    expect(res.status).toBe(200)
+    const json = (await res.json()) as { status: string; faces: string }
+    expect(json.status).toBe('ok')
+    expect(['aus', 'bereit', 'Modell fehlt']).toContain(json.faces)
   })
 })
