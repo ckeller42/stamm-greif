@@ -13,6 +13,22 @@ type ReconcileIO = { input: Record<string, never>; output: { deleted: number } }
  * so this returns in seconds even for a large archive and the backlog drains over hours.
  */
 export const backfillFacesHandler: TaskHandler<BackfillIO> = async ({ req }) => {
+  // Review (Task 6, round 2), Low: mirrors purgePapierkorbHandler's own draft-aware reasoning
+  // (src/jobs/purgePapierkorb.ts) — a plain find() reads the MAIN `photos` row, which can be
+  // STALE relative to the document's true current state. Concretely: a photo published earlier,
+  // then "unpublished" via a `draft: true` update (`isSavingDraft` skips the main-row write
+  // entirely — same mechanism purgePapierkorb's own comment documents at length) still has
+  // `_status: 'published'` on its main row even though its LATEST version now says `draft`.
+  // Photos' own publish-time afterChange hook never enqueues for that photo again (it only fires
+  // on an actual `_status`/filename transition), so without this, a full backfill sweep would
+  // keep re-enqueueing detection for a photo the archive no longer considers published, every
+  // single time it's run. `draft: true` here routes through `payload.db.queryDrafts`
+  // (collections/operations/find.js), which filters against each document's LATEST version
+  // (draft or published) rather than the main table — directly answering "is this genuinely
+  // published right now," no main-row staleness possible. Unlike purgePapierkorb's own guard,
+  // this needs no second qualification pass: backfill's failure mode (wrongly skipping a photo
+  // that's actually still published) is "photo waits for the next backfill run," not
+  // over-deletion — there is no asymmetric harm here that would justify the two-phase dance.
   const photos = await req.payload.find({
     collection: 'photos',
     where: {
@@ -22,6 +38,7 @@ export const backfillFacesHandler: TaskHandler<BackfillIO> = async ({ req }) => 
         { hasHiddenPerson: { not_equals: true } },
       ],
     },
+    draft: true,
     limit: 0,
     pagination: false,
     overrideAccess: true,

@@ -121,12 +121,38 @@ export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ r
   const stale = await req.payload.update({
     collection: 'face-suggestions',
     where: {
-      and: [{ status: { equals: 'offen' } }, { detectedAt: { less_than: staleCutoff } }],
+      and: [
+        { status: { equals: 'offen' } },
+        {
+          // Review (Task 6, round 2), Low: `detectedAt` is always set by detectFacesHandler on
+          // the normal path, but SQL `less_than` never matches NULL — a row that somehow lacks it
+          // (a manually-created row, a future code path that forgets to set it) would silently
+          // never expire and leak its embedding forever. `createdAt` is Payload's own automatic
+          // timestamp (every collection gets one unless `timestamps: false`, which
+          // FaceSuggestions doesn't set) — it always exists, so it's the fallback cutoff for
+          // exactly the rows `detectedAt` can't answer for.
+          or: [
+            { detectedAt: { less_than: staleCutoff } },
+            { and: [{ detectedAt: { exists: false } }, { createdAt: { less_than: staleCutoff } }] },
+          ],
+        },
+      ],
     },
     data: { status: 'abgelehnt', embedding: null },
     overrideAccess: true,
     req,
   })
+  // Review (Task 6, round 2), H1 (same class as purge-face-data.ts, lower stakes: a missed
+  // expiry just means a stale template lingers one more day, not a consent breach): a bulk
+  // `update({ where })` never rejects on a per-row failure, it resolves with that row's error
+  // pushed onto `errors[]`. Reading only `docs.length` would silently under-report (or fully
+  // hide, if every row failed) an incomplete sweep.
+  if (stale.errors.length > 0) {
+    throw new Error(
+      `face-suggestions-expire-incomplete: ${stale.errors.length} row(s) failed to expire: ` +
+        stale.errors.map((e) => e.message).join('; '),
+    )
+  }
   if (stale.docs.length > 0) {
     req.payload.logger.info({ msg: 'face-suggestions-expired', expired: stale.docs.length })
   }

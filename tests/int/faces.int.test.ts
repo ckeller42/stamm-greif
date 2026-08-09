@@ -201,6 +201,14 @@ async function runFacesQueue(): Promise<void> {
     result = await payload.jobs.run({ queue: 'faces', overrideAccess: true })
     iterations++
   }
+  // Review (Task 6, round 2), Low: hitting the cap without ever seeing `noJobsRemaining` means
+  // the queue genuinely never drained (a real stuck/looping job, not just "this test's own
+  // backlog is unusually deep") — silently returning here would have every caller's SUBSEQUENT
+  // assertion fail with a confusing "no suggestion found" instead of pointing at the actual queue
+  // problem.
+  if (!result.noJobsRemaining) {
+    throw new Error(`runFacesQueue: 'faces' queue did not drain after ${iterations} iterations`)
+  }
 }
 
 async function suggestionsFor(photoId: string | number) {
@@ -580,6 +588,105 @@ describe('consent purge and delete cascade', () => {
       })).docs.length,
     ).toBe(0)
   })
+
+  // Review (Task 6, round 2), C1: face_suggestions.suggested_person_id is `ON DELETE set null`,
+  // in every deploy mode — never hand-edited to cascade the way photos.id was. A HARD DELETE of
+  // the person fires that FK action INSIDE the `DELETE FROM people` statement, before any
+  // afterDelete hook runs, nulling `suggested_person_id` on the row first. A `where: {
+  // suggestedPerson: { equals: personId } }` query run afterward — this suite's existing purge
+  // tests, and the original (pre-fix) afterDelete hook — therefore matches nothing: the row (and,
+  // for a `bestaetigt` one, its embedding) survives forever, with the biometric template intact,
+  // unreachable by reconcileHiddenFaceData (same query shape) and untouched by the 180-day sweep
+  // (only ever looks at `offen` rows). This asserts the row itself is gone by id — not just that
+  // `suggestedPerson` got nulled — which is the one assertion shape that actually distinguishes
+  // "purged" from "silently orphaned."
+  it('hard-deleting a person purges their face-suggestions rows, not just nulls suggestedPerson (C1)', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `HardDelete ${Date.now()}` }, overrideAccess: true,
+    })
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'hard-delete-purge', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+    await payload.update({
+      collection: 'face-suggestions', id: row.id,
+      data: { status: 'bestaetigt', suggestedPerson: person.id }, overrideAccess: true,
+    })
+    // The embedding is present before the delete, so "the row is gone" below can't pass vacuously
+    // because there was never anything to purge in the first place.
+    const before = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0,
+    })
+    expect(before.embedding).toBeTruthy()
+
+    await payload.delete({ collection: 'people', id: person.id, overrideAccess: true })
+
+    const after = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0, disableErrors: true,
+    })
+    expect(after).toBeNull()
+  })
+})
+
+// Review (Task 6, round 2), M(a): the "cannot come apart" guarantee purge-face-data.ts's own
+// comment claims — hiding a person and purging their face data happen in ONE transaction — was
+// never actually exercised by a failure. FACES_TEST_FORCE_PURGE_FAILURE is an env-gated
+// injection point purgeFaceDataForPerson checks before doing any real work (src/hooks/
+// purge-face-data.ts), so this can force the purge to fail without needing a real DB-level fault.
+describe('a forced purge failure rolls back the hidden flag, not just skips the purge', () => {
+  it('single-doc update({ hidden: true }) throws and hidden reloads false', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `ForceFail ${Date.now()}` }, overrideAccess: true,
+    })
+    process.env.FACES_TEST_FORCE_PURGE_FAILURE = '1'
+    try {
+      await expect(
+        payload.update({
+          collection: 'people', id: person.id, data: { hidden: true }, overrideAccess: true,
+        }),
+      ).rejects.toThrow()
+    } finally {
+      delete process.env.FACES_TEST_FORCE_PURGE_FAILURE
+    }
+    const reloaded = await payload.findByID({
+      collection: 'people', id: person.id, overrideAccess: true, depth: 0,
+    })
+    expect(reloaded.hidden).toBe(false)
+  })
+})
+
+// Review (Task 6, round 2), C2: `payload.update({ where })` — the admin list view's bulk-edit
+// action, and the identical `PATCH /api/people?where=...` REST call — is a different Payload
+// operation (`updateOperation`, collections/operations/update.js) from the single-document
+// `updateByID` the normal per-person edit view uses, and `bulkOperationsSingleTransaction`
+// defaults to false there: each matched document gets its own transaction, and a hook throwing
+// for one document does NOT roll that document's own already-committed write back — it lands in
+// the operation's `errors[]` array while the HTTP response still reports success and `hidden`
+// stays committed true. `disableBulkEdit: true` (People.ts) closes this specific path entirely by
+// rejecting it up front, for any non-overrideAccess caller — verified directly against
+// update.js's own guard, which runs before `updateOperation` does anything else.
+describe('People bulk edit is disabled (C2)', () => {
+  it('a kurator cannot bulk-update people via PATCH .../people?where=... (disableBulkEdit)', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `BulkEdit ${Date.now()}` }, overrideAccess: true,
+    })
+    const cookie = await loginCookie(kuratorEmail)
+    const res = await fetch(`http://localhost:3000/api/people?where[id][equals]=${person.id}`, {
+      method: 'PATCH',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hidden: true }),
+    })
+    expect(res.status).toBe(403)
+    const reloaded = await payload.findByID({
+      collection: 'people', id: person.id, overrideAccess: true, depth: 0,
+    })
+    expect(reloaded.hidden).toBe(false)
+  })
 })
 
 describe('backfillFaces task', () => {
@@ -694,6 +801,50 @@ describe('backfillFaces task', () => {
       expect(docs.length).toBe(1)
       expect(docs[0].id).toBe(row.id)
       expect(docs[0].status).toBe('abgelehnt')
+    },
+  )
+
+  // Review (Task 6, round 2), Low: mirrors purgePapierkorb.int.test.ts's own
+  // createDraftSoftDeletedPhoto shape — a photo that IS published on the main row (stale) but
+  // whose LATEST version has since been unpublished via a `draft: true` update (`isSavingDraft`
+  // skips the main-row write, so the main row never learns about it). Asserted at the job-queue
+  // level rather than via a resulting suggestion count: detectFacesHandler's own re-check ALSO
+  // reads the (same, stale) main row at run time, so a wrongly re-enqueued job would still
+  // eventually produce output indistinguishable from a correctly-skipped one once run — counting
+  // how many `detectFaces` jobs exist for this photo id before/after backfillFacesHandler runs is
+  // what actually isolates its own candidate-selection query, independent of that.
+  it(
+    'does not re-enqueue a photo that is stale-published on the main row but ' +
+      'draft-unpublished on its latest version',
+    async () => {
+      const photo = await payload.create({
+        collection: 'photos',
+        data: { caption: 'stale-main-row', datePrecision: 'unknown', _status: 'published' },
+        filePath: 'tests/fixtures/gesicht-c.jpg',
+        overrideAccess: true,
+      })
+      createdPhotoIds.push(photo.id)
+      // "Unpublish" via a draft-only update — main row stays _status: 'published' (stale).
+      await payload.update({
+        collection: 'photos', id: photo.id, draft: true, data: { _status: 'draft' },
+        overrideAccess: true,
+      })
+
+      const detectFacesJobCountFor = async (photoId: number) => {
+        const jobs = await payload.find({
+          collection: 'payload-jobs',
+          where: { taskSlug: { equals: 'detectFaces' } },
+          overrideAccess: true, pagination: false, depth: 0,
+        })
+        return jobs.docs.filter((j) => (j.input as { photoId?: number } | null)?.photoId === photoId).length
+      }
+      const before = await detectFacesJobCountFor(photo.id)
+
+      await payload.jobs.queue({ task: 'backfillFaces', input: {} })
+      await payload.jobs.run({ overrideAccess: true })
+
+      const after = await detectFacesJobCountFor(photo.id)
+      expect(after).toBe(before)
     },
   )
 })

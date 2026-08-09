@@ -110,6 +110,25 @@ docker compose up -d --build   # App + Caddy starten
 Migrationen müssen hier **nicht** erneut laufen — der Dump enthält bereits das komplette
 Schema inklusive der Payload-internen `payload_migrations`-Tabelle.
 
+**Schritt 5 (P2.3 — Gesichtserkennung):** `reconcileHiddenFaceData` einmal manuell auslösen,
+sobald die App wieder läuft. Der Dump aus Schritt 3 enthält auch `face_suggestions` —
+Gesichtsdaten liegen in derselben Datenbank wie alles andere und sind damit ebenso im Backup wie
+jede sonstige Tabelle. Ein Restore kann also Gesichts-Vorlagen (Embeddings) von Personen
+wiederherstellen, deren Einwilligung zwischenzeitlich widerrufen wurde (`hidden: true`) — der
+ursprüngliche Widerruf hat sie bereits transaktional gelöscht (siehe
+`src/hooks/purge-face-data.ts`), aber ein älterer Dump kennt diesen Widerruf noch nicht.
+`reconcileHiddenFaceData` ist idempotent (auf einem gesunden System ein No-op) und löscht
+Gesichtsdaten für JEDE aktuell verborgene Person erneut:
+
+```sh
+# Admin-Login vorausgesetzt (POST /api/payload-jobs ist per jobsCollectionOverrides admin-only):
+curl -X POST http://localhost:3000/api/payload-jobs \
+  -H 'Content-Type: application/json' -H "Cookie: $ADMIN_COOKIE" \
+  -d '{"task": "reconcileHiddenFaceData", "input": {}}'
+# … oder im Admin-UI unter /admin/collections/payload-jobs → „Create New" → Task
+# „reconcileHiddenFaceData" wählen, dann per Cron/„Run Jobs Now" ausführen lassen.
+```
+
 ## Fehlersuche
 
 Wenn ein API-Fehler auftritt (eine fehlgeschlagene Server-Antwort), zeigt Payload in der
