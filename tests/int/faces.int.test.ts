@@ -310,6 +310,96 @@ describe('embeddings identify the same person across photos', () => {
   })
 })
 
+describe('confirm / reject / undo', () => {
+  it('a mitglied is refused on all three endpoints', async () => {
+    const cookie = await loginCookie(memberEmail)
+    for (const action of ['bestaetigen', 'ablehnen', 'zuruecksetzen']) {
+      const res = await fetch(`http://localhost:3000/api/face-suggestions/1/${action}`, {
+        method: 'POST',
+        headers: { cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personId: 1 }),
+      })
+      expect(res.status).toBe(403)
+    }
+  })
+
+  it('confirming tags the person on the photo; undoing removes the tag again', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `Bestätigt ${Date.now()}` }, overrideAccess: true,
+    })
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'bestätigen', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-a.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+    const cookie = await loginCookie(kuratorEmail)
+
+    const ok = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/bestaetigen`, {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personId: person.id }),
+    })
+    expect(ok.status).toBe(200)
+    let after = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true, depth: 0 })
+    expect((after.people ?? []).map(String)).toContain(String(person.id))
+
+    const undo = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/zuruecksetzen`, {
+      method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}',
+    })
+    expect(undo.status).toBe(200)
+    after = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true, depth: 0 })
+    expect((after.people ?? []).map(String)).not.toContain(String(person.id))
+  })
+
+  it('rejecting deletes the embedding', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'ablehnen', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-c.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+    const cookie = await loginCookie(kuratorEmail)
+    const res = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/ablehnen`, {
+      method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}',
+    })
+    expect(res.status).toBe(200)
+    const reloaded = await payload.findByID({
+      collection: 'face-suggestions', id: row.id, overrideAccess: true, depth: 0,
+    })
+    expect(reloaded.status).toBe('abgelehnt')
+    expect(reloaded.embedding).toBeFalsy()
+  })
+
+  it('confirming a hidden person is refused with 409', async () => {
+    const person = await payload.create({
+      collection: 'people', data: { name: `Verborgen ${Date.now()}`, hidden: true }, overrideAccess: true,
+    })
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { caption: 'verborgen', datePrecision: 'unknown', _status: 'published' },
+      filePath: 'tests/fixtures/gesicht-b.jpg',
+      overrideAccess: true,
+    })
+    createdPhotoIds.push(photo.id)
+    await runFacesQueue()
+    const [row] = await suggestionsFor(photo.id)
+    const cookie = await loginCookie(kuratorEmail)
+    const res = await fetch(`http://localhost:3000/api/face-suggestions/${row.id}/bestaetigen`, {
+      method: 'POST',
+      headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ personId: person.id }),
+    })
+    expect(res.status).toBe(409)
+  })
+})
+
 describe('matching against confirmed faces', () => {
   it('suggests the person on a second photo once the first is confirmed', async () => {
     const person = await payload.create({

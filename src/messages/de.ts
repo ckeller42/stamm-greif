@@ -1,6 +1,6 @@
 export const de = {
   siteName: 'Stamm-Greif-Archiv',
-  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', anmelden: 'Anmelden', abmelden: 'Abmelden' },
+  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', gesichter: 'Gesichter', anmelden: 'Anmelden', abmelden: 'Abmelden' },
   login: { title: 'Anmelden', email: 'E-Mail', password: 'Passwort', submit: 'Anmelden', error: 'Anmeldung fehlgeschlagen' },
   invite: { title: 'Willkommen beim Stamm-Greif-Archiv', name: 'Dein Name', submit: 'Konto erstellen',
     invalid: 'Diese Einladung ist ungültig oder wurde bereits verwendet.',
@@ -18,4 +18,19 @@ export const de = {
     formats: 'JPEG, PNG, TIFF, WebP, HEIC oder HEIF — iPhone-Fotos werden jetzt direkt unterstützt und beim Hochladen automatisch in JPEG umgewandelt.',
     duplicateWarning: 'Mögliches Duplikat eines vorhandenen Fotos',
     status: { wartet: 'wartet', laedt: 'lädt', fertig: 'fertig', fehler: 'fehler' } },
+  gesichter: {
+    title: 'Gesichter prüfen',
+    hint: 'Wer ist das? Bestätigte Gesichter helfen dabei, dieselbe Person auf weiteren Fotos vorzuschlagen.',
+    empty: 'Keine offenen Vorschläge.',
+    disabled: 'Gesichtserkennung ist nicht aktiviert.',
+    person: 'Person',
+    choose: '(unbekannt)',
+    similarity: 'Ähnlichkeit',
+    confirm: 'Bestätigen',
+    reject: 'Ablehnen',
+    undo: 'Rückgängig',
+    saving: 'speichert',
+    error: 'Das hat nicht geklappt — bitte erneut versuchen.',
+    needsPerson: 'Bitte zuerst eine Person auswählen.',
+  },
 } as const
