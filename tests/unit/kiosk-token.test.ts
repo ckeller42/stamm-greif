@@ -11,8 +11,13 @@ describe('kiosk-token', () => {
   })
 
   it('round-trips a download token', () => {
-    const t = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000 })
-    expect(verifyKioskToken(t, 'download')).toMatchObject({ sid: 1, pid: 7 })
+    const t = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000, kind: 'download' })
+    expect(verifyKioskToken(t, 'download')).toMatchObject({ sid: 1, pid: 7, kind: 'download' })
+  })
+
+  it('round-trips an image token', () => {
+    const t = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000, kind: 'image' })
+    expect(verifyKioskToken(t, 'image')).toMatchObject({ sid: 1, pid: 7, kind: 'image' })
   })
 
   it('rejects an expired token', () => {
@@ -35,10 +40,24 @@ describe('kiosk-token', () => {
   })
 
   it('rejects a kind mismatch (download token read as session and vice-versa)', () => {
-    const dl = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000 })
+    const dl = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000, kind: 'download' })
     expect(verifyKioskToken(dl, 'session')).toBeNull()
     const se = signKioskToken({ sid: 1, exp: Date.now() + 60_000 })
     expect(verifyKioskToken(se, 'download')).toBeNull()
+  })
+
+  it('rejects an image token read as download, and a download token read as image', () => {
+    const img = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000, kind: 'image' })
+    expect(verifyKioskToken(img, 'download')).toBeNull()
+    const dl = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000, kind: 'download' })
+    expect(verifyKioskToken(dl, 'image')).toBeNull()
+  })
+
+  it('rejects an image token read as session, and a session token read as image', () => {
+    const img = signKioskToken({ sid: 1, pid: 7, exp: Date.now() + 60_000, kind: 'image' })
+    expect(verifyKioskToken(img, 'session')).toBeNull()
+    const se = signKioskToken({ sid: 1, exp: Date.now() + 60_000 })
+    expect(verifyKioskToken(se, 'image')).toBeNull()
   })
 
   it('never throws on garbage input', () => {

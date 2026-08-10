@@ -4,11 +4,12 @@
 //   DATABASE_URI=postgres://archiv:archiv@localhost:5433/archiv_test pnpm dev
 // Then run `pnpm test:int` while that server is up.
 //
-// This is the kiosk safety property (spec §3, §11): a photo reaches the kiosk download ONLY if
-// kioskFreigegeben AND published AND not-hidden-person AND not-binned — a VALID signature is
-// never enough. Consent is re-checked per request via kioskPhotoWhere() ANDed into an
-// overrideAccess:true query. Every "never serves" case below carries a VALID, correctly-signed
-// download token — the point is that the signature alone must not be sufficient.
+// This is the kiosk safety property (spec §3, §11): a photo reaches the kiosk download OR the
+// kiosk image (slideshow <img> source) ONLY if kioskFreigegeben AND published AND
+// not-hidden-person AND not-binned — a VALID signature is never enough. Consent is re-checked per
+// request via kioskPhotoWhere() ANDed into an overrideAccess:true query, on BOTH endpoints. Every
+// "never serves" case below carries a VALID, correctly-signed token of the matching kind — the
+// point is that the signature alone must not be sufficient.
 import path from 'node:path'
 import { describe, it, expect, beforeAll } from 'vitest'
 import { getPayload, type Payload } from 'payload'
@@ -85,8 +86,13 @@ async function inKioskSet(pid: number): Promise<boolean> {
 }
 
 async function download(pid: number): Promise<Response> {
-  const d = signKioskToken({ sid, pid, exp: validExp })
+  const d = signKioskToken({ sid, pid, exp: validExp, kind: 'download' })
   return fetch(`http://localhost:3000/api/kiosk/download?d=${encodeURIComponent(d)}`)
+}
+
+async function image(pid: number): Promise<Response> {
+  const d = signKioskToken({ sid, pid, exp: validExp, kind: 'image' })
+  return fetch(`http://localhost:3000/api/kiosk/image?d=${encodeURIComponent(d)}`)
 }
 
 describe('kiosk safety property', () => {
@@ -140,7 +146,7 @@ describe('kiosk safety property', () => {
       data: { revokedAt: new Date().toISOString() },
       overrideAccess: true,
     })
-    const d = signKioskToken({ sid: Number(s.id), pid, exp: validExp })
+    const d = signKioskToken({ sid: Number(s.id), pid, exp: validExp, kind: 'download' })
     const res = await fetch(`http://localhost:3000/api/kiosk/download?d=${encodeURIComponent(d)}`)
     expect(res.status).toBe(404)
   })
@@ -158,14 +164,14 @@ describe('kiosk safety property', () => {
       data: { expiresAt: new Date(Date.now() - 1000).toISOString() },
       overrideAccess: true,
     })
-    const d = signKioskToken({ sid: Number(s.id), pid, exp: validExp })
+    const d = signKioskToken({ sid: Number(s.id), pid, exp: validExp, kind: 'download' })
     const res = await fetch(`http://localhost:3000/api/kiosk/download?d=${encodeURIComponent(d)}`)
     expect(res.status).toBe(404)
   })
 
   it('rejects an expired token (exp claim in the past)', async () => {
     const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true })
-    const d = signKioskToken({ sid, pid, exp: Date.now() - 1 })
+    const d = signKioskToken({ sid, pid, exp: Date.now() - 1, kind: 'download' })
     const res = await fetch(`http://localhost:3000/api/kiosk/download?d=${encodeURIComponent(d)}`)
     expect(res.status).toBe(404)
   })
@@ -176,8 +182,113 @@ describe('kiosk safety property', () => {
     expect(res.status).toBe(404)
   })
 
+  it('rejects an IMAGE-kind token at the download endpoint (kind separation)', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true })
+    const imageToken = signKioskToken({ sid, pid, exp: validExp, kind: 'image' })
+    const res = await fetch(`http://localhost:3000/api/kiosk/download?d=${encodeURIComponent(imageToken)}`)
+    expect(res.status).toBe(404)
+  })
+
   it('rejects a garbage/malformed token', async () => {
     const res = await fetch('http://localhost:3000/api/kiosk/download?d=not-a-real-token')
+    expect(res.status).toBe(404)
+  })
+})
+
+// This is the endpoint the slideshow's <img src> actually points at (see task-5 review: Payload's
+// own /api/photos/file/:filename, which p.sizes.web.url would resolve to, runs canReadPhoto and
+// 403s an anonymous kiosk visitor — every slideshow image would be broken without this route).
+// Same safety property as the download endpoint, re-proven against this endpoint specifically:
+// a VALID, correctly-signed 'image'-kind token is never enough on its own.
+describe('kiosk image endpoint (slideshow <img> source)', () => {
+  it('serves a properly marked, published, not-hidden, not-binned photo inline (correct bytes + inline disposition)', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true })
+    expect(await inKioskSet(pid)).toBe(true)
+    const res = await image(pid)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-disposition')).toBe('inline')
+    expect(res.headers.get('content-type')).toMatch(/^image\//)
+    const bytes = Buffer.from(await res.arrayBuffer())
+    expect(bytes.length).toBeGreaterThan(0)
+  })
+
+  it('never serves an UNMARKED published photo (kioskFreigegeben=false), even with a valid image token', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: false })
+    expect((await image(pid)).status).toBe(404)
+  })
+
+  it('never serves a HIDDEN-PERSON photo even if marked, even with a valid image token', async () => {
+    const person = await payload.create({
+      collection: 'people',
+      data: { name: 'Verborgen Bild', hidden: true },
+      overrideAccess: true,
+    })
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true, people: [person.id] })
+    expect(await inKioskSet(pid)).toBe(false)
+    expect((await image(pid)).status).toBe(404)
+  })
+
+  it('never serves a DRAFT marked photo, even with a valid image token', async () => {
+    const pid = await makePhoto({ _status: 'draft', kioskFreigegeben: true })
+    expect((await image(pid)).status).toBe(404)
+  })
+
+  it('never serves a BINNED marked photo, even with a valid image token', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true, deletedAt: new Date().toISOString() })
+    expect((await image(pid)).status).toBe(404)
+  })
+
+  it('rejects a valid image token once its session is revoked', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true })
+    const s = await payload.create({
+      collection: 'kiosk-sessions',
+      data: { label: 'rev-img', expiresAt: new Date(validExp).toISOString() },
+      overrideAccess: true,
+    })
+    await payload.update({
+      collection: 'kiosk-sessions',
+      id: s.id,
+      data: { revokedAt: new Date().toISOString() },
+      overrideAccess: true,
+    })
+    const d = signKioskToken({ sid: Number(s.id), pid, exp: validExp, kind: 'image' })
+    const res = await fetch(`http://localhost:3000/api/kiosk/image?d=${encodeURIComponent(d)}`)
+    expect(res.status).toBe(404)
+  })
+
+  it('rejects a valid image token once its session row has expired (independent of the token exp claim)', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true })
+    const s = await payload.create({
+      collection: 'kiosk-sessions',
+      data: { label: 'expired-img', expiresAt: new Date(Date.now() + 1000).toISOString() },
+      overrideAccess: true,
+    })
+    await payload.update({
+      collection: 'kiosk-sessions',
+      id: s.id,
+      data: { expiresAt: new Date(Date.now() - 1000).toISOString() },
+      overrideAccess: true,
+    })
+    const d = signKioskToken({ sid: Number(s.id), pid, exp: validExp, kind: 'image' })
+    const res = await fetch(`http://localhost:3000/api/kiosk/image?d=${encodeURIComponent(d)}`)
+    expect(res.status).toBe(404)
+  })
+
+  it('rejects a DOWNLOAD-kind token at the image endpoint (kind separation)', async () => {
+    const pid = await makePhoto({ _status: 'published', kioskFreigegeben: true })
+    const downloadToken = signKioskToken({ sid, pid, exp: validExp, kind: 'download' })
+    const res = await fetch(`http://localhost:3000/api/kiosk/image?d=${encodeURIComponent(downloadToken)}`)
+    expect(res.status).toBe(404)
+  })
+
+  it('rejects a SESSION-kind token at the image endpoint (kind separation)', async () => {
+    const sessionToken = signKioskToken({ sid, exp: validExp })
+    const res = await fetch(`http://localhost:3000/api/kiosk/image?d=${encodeURIComponent(sessionToken)}`)
+    expect(res.status).toBe(404)
+  })
+
+  it('rejects a garbage/malformed token', async () => {
+    const res = await fetch('http://localhost:3000/api/kiosk/image?d=not-a-real-token')
     expect(res.status).toBe(404)
   })
 })

@@ -55,11 +55,20 @@ export default async function KioskPage({
 
   const base = await kioskBaseUrl()
   const expMs = new Date(session.expiresAt).getTime()
+  // Two DIFFERENT signed tokens per photo, for two different endpoints:
+  //  - `img` (kind:'image')    -> /api/kiosk/image    -> inline WEB-size bytes, for the <img> tag
+  //  - `dl`  (kind:'download') -> /api/kiosk/download  -> attachment ORIGINAL bytes, for the QR
+  // Payload's own /api/photos/file/:filename route (what p.sizes.web.url would point at) runs
+  // canReadPhoto, which 403s for an anonymous kiosk visitor — it can never be the <img src> here.
+  // The `kind` marker baked into each token (see kiosk-token.ts) keeps them from being
+  // interchangeable even though both share the same {sid,pid,exp} shape.
   const slides = (photos.docs as Photo[]).map((p) => {
-    const dl = signKioskToken({ sid: session.id, pid: Number(p.id), exp: expMs })
+    const pid = Number(p.id)
+    const img = signKioskToken({ sid: session.id, pid, exp: expMs, kind: 'image' })
+    const dl = signKioskToken({ sid: session.id, pid, exp: expMs, kind: 'download' })
     return {
       id: p.id,
-      src: p.sizes?.web?.url ?? p.url ?? '',
+      src: `${base}/api/kiosk/image?d=${encodeURIComponent(img)}`,
       caption: p.caption ?? '',
       qr: qrSvg(`${base}/api/kiosk/download?d=${encodeURIComponent(dl)}`),
     }
