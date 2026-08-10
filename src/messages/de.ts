@@ -1,6 +1,6 @@
 export const de = {
   siteName: 'Stamm-Greif-Archiv',
-  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', gesichter: 'Gesichter', kiosk: 'Kiosk', anmelden: 'Anmelden', abmelden: 'Abmelden' },
+  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', zeitleiste: 'Zeitleiste', gesichter: 'Gesichter', kiosk: 'Kiosk', anmelden: 'Anmelden', abmelden: 'Abmelden' },
   login: { title: 'Anmelden', email: 'E-Mail', password: 'Passwort', submit: 'Anmelden', error: 'Anmeldung fehlgeschlagen' },
   invite: { title: 'Willkommen beim Stamm-Greif-Archiv', name: 'Dein Name', submit: 'Konto erstellen',
     invalid: 'Diese Einladung ist ungültig oder wurde bereits verwendet.',
@@ -63,6 +63,13 @@ export const de = {
     revoked: 'Widerrufen.',
     empty: 'Keine aktiven Kiosk-Links.',
     error: 'Das hat nicht geklappt — bitte erneut versuchen.',
+  },
+  zeitleiste: {
+    title: 'Zeitleiste',
+    chooseSeries: 'Reihe wählen',
+    noSeries: 'Keine Ereignisreihen vorhanden.',
+    emptyYear: 'Keine Fotos für dieses Ereignis.',
+    jahr: 'Jahr',
   },
   photos: {
     kioskFreigegeben: {
