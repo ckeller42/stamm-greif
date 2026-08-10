@@ -27,6 +27,17 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 ENV SHARP_FORCE_GLOBAL_LIBVIPS=1
 RUN pnpm install --frozen-lockfile
 
+# Face-recognition models (P2.3). Downloaded here rather than committed: 16 MB of binary that
+# would otherwise live in this public repo's history forever. The SHA-256s in the script are what
+# make this reproducible — a silently changed upstream file fails the build instead of quietly
+# changing recognition behaviour. Licence: InsightFace's model zoo states these weights are for
+# non-commercial research use only, which a Verein archive satisfies (see docs/betrieb.md).
+FROM alpine:3.21 AS facemodels
+RUN apk add --no-cache curl coreutils bash
+WORKDIR /models
+COPY scripts/fetch-face-models.sh .
+RUN bash fetch-face-models.sh /models/faces
+
 FROM node:22-alpine AS build
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11.18.0 --activate
@@ -51,6 +62,18 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # container runtime via compose.
 ENV PAYLOAD_SECRET=build-time-placeholder-not-used-at-runtime
 RUN pnpm build
+# Hard build-time gate on face inference actually working (P2.3) — same class of silent-fallback
+# failure the HEIC probe below exists for. A missing/untraced .wasm, an empty model directory or
+# a broken alignment would otherwise ship a green image whose only symptom is "no suggestions,
+# ever". Runs here, in `build`, rather than against the `run` stage's standalone bundle: verified
+# (2026-08-09, task-1-report.md) that plain `node --experimental-strip-types` cannot resolve the
+# `@/lib` tsconfig path alias face-model.ts imports (ERR_MODULE_NOT_FOUND), and this stage
+# already has both `tsx` (a devDependency, resolves tsconfig paths natively) and the full TS
+# source tree — no re-export shim into the standalone bundle needed. Same assertions the plan
+# specified either way; only the plumbing changed.
+COPY --from=facemodels /models/faces ./models/faces
+RUN pnpm exec tsx scripts/probe-faces.mjs tests/fixtures/gesicht-a.jpg
+RUN rm -rf ./models/faces
 
 FROM node:22-alpine AS run
 WORKDIR /app
@@ -79,6 +102,8 @@ ENV PORT=3000
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/public ./public
+COPY --from=facemodels --chown=node:node /models/faces /app/models/faces
+ENV FACE_MODELS_DIR=/app/models/faces
 RUN mkdir -p /app/photos && chown node:node /app/photos
 # Hard build-time gate on HEIC decode actually working, not just "the layer that installs
 # vips-heif ran without error." Both real failure modes hit during development left a green

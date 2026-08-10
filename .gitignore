@@ -52,3 +52,7 @@ node_modules/
 
 # E2E seed fixtures written by tests/e2e/global-setup.ts
 tests/e2e/.seed.json
+
+# Face-recognition models — fetched with SHA-256 verification by scripts/fetch-face-models.sh,
+# never committed (16 MB of binary, and this repo is public).
+/models/

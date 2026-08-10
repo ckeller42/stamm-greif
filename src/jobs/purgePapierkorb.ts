@@ -114,15 +114,85 @@ export const purgePapierkorbHandler: TaskHandler<PurgePapierkorbIO> = async ({ r
     }
   }
 
+  // Speicherbegrenzung (Art. 5 Abs. 1 lit. e): an `offen` suggestion nobody ever reviewed is a
+  // biometric template for an unidentified person. After 180 days it loses the template and
+  // becomes a tombstone, which still stops a re-run resurrecting the same box.
+  //
+  // Final review, L13: this sweep's own failure must not suppress the `papierkorb-purge` summary
+  // line below — betrieb.md's own "Prüfen, ob er läuft" instructions tell operators to grep for
+  // exactly that line daily, and a thrown error ahead of it (the original round-2 H1 fix's
+  // ordering) would make a bad day for face-suggestions expiry look identical to "the purge job
+  // didn't run at all," hiding the one thing that DID succeed (the actual Papierkorb purge above,
+  // already computed by this point). So: catch around the sweep entirely (both a thrown error
+  // from the update call itself and a partial-failure result count as "the sweep failed"), log
+  // that failure, EMIT the summary line regardless, and only THEN throw — a distinct error,
+  // clearly attributable to the sweep and not the purge — so the job still fails visibly
+  // (Payload's own retry/error-log handling applies) without costing the summary line its
+  // baseline "the purge job is alive and ran" signal.
+  const staleCutoff = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString()
+  let staleExpireError: Error | undefined
+  try {
+    const stale = await req.payload.update({
+      collection: 'face-suggestions',
+      where: {
+        and: [
+          { status: { equals: 'offen' } },
+          {
+            // Review (Task 6, round 2), Low: `detectedAt` is always set by detectFacesHandler on
+            // the normal path, but SQL `less_than` never matches NULL — a row that somehow lacks
+            // it (a manually-created row, a future code path that forgets to set it) would
+            // silently never expire and leak its embedding forever. `createdAt` is Payload's own
+            // automatic timestamp (every collection gets one unless `timestamps: false`, which
+            // FaceSuggestions doesn't set) — it always exists, so it's the fallback cutoff for
+            // exactly the rows `detectedAt` can't answer for.
+            or: [
+              { detectedAt: { less_than: staleCutoff } },
+              { and: [{ detectedAt: { exists: false } }, { createdAt: { less_than: staleCutoff } }] },
+            ],
+          },
+        ],
+      },
+      data: { status: 'abgelehnt', embedding: null },
+      overrideAccess: true,
+      req,
+    })
+    // Review (Task 6, round 2), H1 (same class as purge-face-data.ts, lower stakes: a missed
+    // expiry just means a stale template lingers one more day, not a consent breach): a bulk
+    // `update({ where })` never rejects on a per-row failure, it resolves with that row's error
+    // pushed onto `errors[]`. Reading only `docs.length` would silently under-report (or fully
+    // hide, if every row failed) an incomplete sweep.
+    if (stale.errors.length > 0) {
+      staleExpireError = new Error(
+        `face-suggestions-expire-incomplete: ${stale.errors.length} row(s) failed to expire: ` +
+          stale.errors.map((e) => e.message).join('; '),
+      )
+    }
+    if (stale.docs.length > 0) {
+      req.payload.logger.info({ msg: 'face-suggestions-expired', expired: stale.docs.length })
+    }
+  } catch (err) {
+    staleExpireError = err instanceof Error ? err : new Error(String(err))
+  }
+  if (staleExpireError) {
+    req.payload.logger.error({
+      msg: 'face-suggestions-expire-failed',
+      error: staleExpireError.message,
+    })
+  }
+
   // One structured line per run, always — including the (expected, most days) zero-purged case,
   // so "the purge job is alive and ran" is itself observable from the logs, not just "it deleted
-  // something."
+  // something." Emitted even when the sweep above failed (see the L13 comment on that block).
   req.payload.logger.info({
     msg: 'papierkorb-purge',
     purgedCount,
     cutoff: cutoff.toISOString(),
     failedCount,
   })
+
+  if (staleExpireError) {
+    throw staleExpireError
+  }
   return { output: { purgedCount } }
 }
 

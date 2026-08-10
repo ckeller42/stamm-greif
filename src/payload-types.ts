@@ -78,6 +78,7 @@ export interface Config {
     tags: Tag;
     attendance: Attendance;
     photos: Photo;
+    'face-suggestions': FaceSuggestion;
     'payload-kv': PayloadKv;
     'payload-jobs': PayloadJob;
     'payload-locked-documents': PayloadLockedDocument;
@@ -97,6 +98,7 @@ export interface Config {
     tags: TagsSelect<false> | TagsSelect<true>;
     attendance: AttendanceSelect<false> | AttendanceSelect<true>;
     photos: PhotosSelect<false> | PhotosSelect<true>;
+    'face-suggestions': FaceSuggestionsSelect<false> | FaceSuggestionsSelect<true>;
     'payload-kv': PayloadKvSelect<false> | PayloadKvSelect<true>;
     'payload-jobs': PayloadJobsSelect<false> | PayloadJobsSelect<true>;
     'payload-locked-documents': PayloadLockedDocumentsSelect<false> | PayloadLockedDocumentsSelect<true>;
@@ -121,6 +123,9 @@ export interface Config {
   jobs: {
     tasks: {
       purgePapierkorb: TaskPurgePapierkorb;
+      detectFaces: TaskDetectFaces;
+      backfillFaces: TaskBackfillFaces;
+      reconcileHiddenFaceData: TaskReconcileHiddenFaceData;
       inline: {
         input: unknown;
         output: unknown;
@@ -196,6 +201,9 @@ export interface Person {
   name: string;
   bio?: string | null;
   birthYear?: number | null;
+  /**
+   * Löscht beim Aktivieren SOFORT UND UNWIDERRUFLICH alle Gesichts-Vorschläge und -Vorlagen (Embeddings) dieser Person — auch bereits bestätigte. Deaktivieren stellt nichts davon wieder her: die Person wird bei künftigen Fotos wieder nur von Hand markiert, bis ein neuer Vorschlag bestätigt wird.
+   */
   hidden?: boolean | null;
   portrait?: (number | null) | Photo;
   updatedAt: string;
@@ -214,6 +222,9 @@ export interface Photo {
    */
   dateValue?: string | null;
   dateSortKey?: number | null;
+  /**
+   * Eine falsche Gesichts-Bestätigung wird über „Rückgängig" unter /gesichter korrigiert, nicht durch Entfernen einer Person hier — nur „Rückgängig" räumt auch die gespeicherte Gesichts-Vorlage (Embedding) auf.
+   */
   people?: (number | Person)[] | null;
   event?: (number | null) | Event;
   place?: (number | null) | Place;
@@ -369,6 +380,37 @@ export interface Attendance {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "face-suggestions".
+ */
+export interface FaceSuggestion {
+  id: number;
+  photo: number | Photo;
+  boxXMin: number;
+  boxYMin: number;
+  boxXMax: number;
+  boxYMax: number;
+  boxProbability?: number | null;
+  embedding?:
+    | {
+        [k: string]: unknown;
+      }
+    | unknown[]
+    | string
+    | number
+    | boolean
+    | null;
+  suggestedPerson?: (number | null) | Person;
+  similarity?: number | null;
+  status: 'offen' | 'bestaetigt' | 'abgelehnt';
+  confirmedBy?: (number | null) | User;
+  confirmedAt?: string | null;
+  detectedAt?: string | null;
+  sourceVariant?: string | null;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv".
  */
 export interface PayloadKv {
@@ -436,7 +478,7 @@ export interface PayloadJob {
     | {
         executedAt: string;
         completedAt: string;
-        taskSlug: 'inline' | 'purgePapierkorb';
+        taskSlug: 'inline' | 'purgePapierkorb' | 'detectFaces' | 'backfillFaces' | 'reconcileHiddenFaceData';
         taskID: string;
         input?:
           | {
@@ -469,10 +511,14 @@ export interface PayloadJob {
         id?: string | null;
       }[]
     | null;
-  taskSlug?: ('inline' | 'purgePapierkorb') | null;
+  taskSlug?: ('inline' | 'purgePapierkorb' | 'detectFaces' | 'backfillFaces' | 'reconcileHiddenFaceData') | null;
   queue?: string | null;
   waitUntil?: string | null;
   processing?: boolean | null;
+  /**
+   * Used for concurrency control. Jobs with the same key are subject to exclusive/supersedes rules.
+   */
+  concurrencyKey?: string | null;
   meta?:
     | {
         [k: string]: unknown;
@@ -535,6 +581,10 @@ export interface PayloadLockedDocument {
     | ({
         relationTo: 'photos';
         value: number | Photo;
+      } | null)
+    | ({
+        relationTo: 'face-suggestions';
+        value: number | FaceSuggestion;
       } | null);
   globalSlug?: string | null;
   user: {
@@ -773,6 +823,28 @@ export interface PhotosSelect<T extends boolean = true> {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "face-suggestions_select".
+ */
+export interface FaceSuggestionsSelect<T extends boolean = true> {
+  photo?: T;
+  boxXMin?: T;
+  boxYMin?: T;
+  boxXMax?: T;
+  boxYMax?: T;
+  boxProbability?: T;
+  embedding?: T;
+  suggestedPerson?: T;
+  similarity?: T;
+  status?: T;
+  confirmedBy?: T;
+  confirmedAt?: T;
+  detectedAt?: T;
+  sourceVariant?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "payload-kv_select".
  */
 export interface PayloadKvSelect<T extends boolean = true> {
@@ -807,6 +879,7 @@ export interface PayloadJobsSelect<T extends boolean = true> {
   queue?: T;
   waitUntil?: T;
   processing?: T;
+  concurrencyKey?: T;
   meta?: T;
   updatedAt?: T;
   createdAt?: T;
@@ -886,6 +959,30 @@ export interface CollectionsWidget {
  * via the `definition` "TaskPurgePapierkorb".
  */
 export interface TaskPurgePapierkorb {
+  input?: unknown;
+  output?: unknown;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskDetectFaces".
+ */
+export interface TaskDetectFaces {
+  input?: unknown;
+  output?: unknown;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskBackfillFaces".
+ */
+export interface TaskBackfillFaces {
+  input?: unknown;
+  output?: unknown;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "TaskReconcileHiddenFaceData".
+ */
+export interface TaskReconcileHiddenFaceData {
   input?: unknown;
   output?: unknown;
 }

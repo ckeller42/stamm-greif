@@ -10,6 +10,7 @@ import sharp from 'sharp'
 import { Attendance } from './collections/Attendance'
 import { EventSeries } from './collections/EventSeries'
 import { Events } from './collections/Events'
+import { FaceSuggestions } from './collections/FaceSuggestions'
 import { Groups } from './collections/Groups'
 import { Invites } from './collections/Invites'
 import { Memberships } from './collections/Memberships'
@@ -20,6 +21,8 @@ import { Tags } from './collections/Tags'
 import { Users } from './collections/Users'
 import { newErrorId, recordError, sanitizeUrl } from '@/lib/telemetry'
 import { purgePapierkorbTask } from '@/jobs/purgePapierkorb'
+import { detectFacesTask } from '@/jobs/detectFaces'
+import { backfillFacesTask, reconcileHiddenFaceDataTask } from '@/jobs/faceMaintenance'
 import { isAdmin } from '@/access/roles'
 
 // Fix round 1 (H2): every jobs.access.* callback (run/queue/cancel) has the same `{ req }` arg
@@ -47,7 +50,7 @@ const configPromise = buildConfig({
   i18n: { supportedLanguages: { de, en }, fallbackLanguage: 'de' },
   // Users is a scaffold default required for admin auth (admin.user binds to it).
   // Invites powers invite-only onboarding (POST /api/invites/accept).
-  collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance, Photos],
+  collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance, Photos, FaceSuggestions],
   editor: lexicalEditor(),
   secret,
   // Structured JSON logs to stdout (pino). Without this Payload is near-silent in the
@@ -71,7 +74,47 @@ const configPromise = buildConfig({
   // does call getPayload()) is intentional, not an oversight — an idle daily cron with nothing
   // due to purge is a no-op.
   jobs: {
-    tasks: [purgePapierkorbTask],
+    // backfillFaces / reconcileHiddenFaceData (P2.3 Task 6): admin-triggered only, no `schedule`
+    // — they're queued on demand via POST /api/payload-jobs (admin-only, jobsCollectionOverrides
+    // below) rather than on a cron.
+    tasks: [purgePapierkorbTask, detectFacesTask, backfillFacesTask, reconcileHiddenFaceDataTask],
+    // P2.3 Task 6, confirmed the hard way: Task 3's round-2 report already named the mechanism
+    // ("New finding while re-running the full gate...") and flagged this as the cheap mitigation
+    // to reach for if a future task's heavier queue traffic ever made it frequent enough to
+    // matter — backfillFaces (this task) is exactly that. Reproduced directly while running this
+    // task's own gate: backfillFaces enqueuing detectFaces for every eligible photo made the
+    // `faces` queue busy enough that the live `pnpm dev` server's own `autoRun` tick collided
+    // with this suite's explicit `payload.jobs.run()` calls — Postgres `deadlock detected`
+    // between `payload_jobs`' default on-complete bulk DELETE and a per-job completion UPDATE
+    // (confirmed via `pg_stat_activity`: rows stuck `idle in transaction (aborted)`, DDL from a
+    // later test file's own schema push queued behind them, and every request sharing that dev
+    // server's connection pool — including plain logins — stalling for minutes). The aborted side
+    // of the deadlock never got rolled back client-side, permanently leaking a pool slot; enough
+    // collisions exhausts the whole pool. `deleteJobOnComplete: false` removes one side of the
+    // conflict (no more bulk DELETE competing with the UPDATE) — verified this closes it: the
+    // full gate re-run after setting it produced zero deadlocks/aborted-transaction stalls over
+    // the same workload that reliably wedged the pool without it. Tradeoff, same as Task 3 named
+    // it: `payload_jobs`/`payload_jobs_log` rows now accumulate indefinitely (no existing cleanup
+    // task) instead of being deleted on success — worth a follow-up task if the table's growth
+    // ever becomes its own operational concern; out of scope here.
+    deleteJobOnComplete: false,
+    // P2.3 review (Task 3, round 2): two enqueues for the same photo close together (publish,
+    // then a quick file-replace before the first job has run) land as two separate rows in
+    // `payload_jobs`. Without this, `runJobs`' `Promise.all` batch (queues/operations/runJobs/
+    // index.js) can pick both up on the same tick and run them truly concurrently — both read
+    // an empty `decided` set before either has written anything, so detectFacesHandler's own
+    // idempotency (delete-then-recreate 'offen' rows) never gets a chance to fire, and the
+    // kurator sees duplicate offen rows for the same face. `enableConcurrencyControl` is the
+    // documented, built-in fix for exactly this (node_modules/payload/dist/queues/config/types/
+    // index.d.ts's own doc comment: "prevent race conditions" via a `concurrencyKey` field)
+    // rather than a hand-rolled "skip enqueue if a pending row already exists" check, which would
+    // still race the same way against a job that's already `processing: true` when the second
+    // enqueue's own existence-check query runs. detectFacesTask's own `concurrency` (see
+    // src/jobs/detectFaces.ts) is what actually opts `detectFaces` into it — this flag only turns
+    // the mechanism on and adds the (indexed, nullable) `concurrencyKey` column every other task
+    // leaves unset, so purgePapierkorb's own jobs are entirely unaffected. Requires a migration
+    // (see the concurrency_key migration) — the type's own doc comment says so explicitly.
+    enableConcurrencyControl: true,
     // Fix round 1 (M4): `autoRun` only ever RUNS jobs already sitting in the queue — it does
     // not enqueue new ones (that's `schedule`, above). A daily `autoRun` cron here was wrong on
     // two counts: (1) it enqueues-then-immediately-runs on the same tick only by coincidence of
@@ -82,7 +125,29 @@ const configPromise = buildConfig({
     // sits queued and unrun for a full extra day. Running the (cheap — no-op unless something's
     // actually due) autoRun check every 15 minutes instead means a missed tick costs minutes,
     // not a day, while the daily cadence itself still lives solely in the task's own `schedule`.
-    autoRun: [{ cron: '*/15 * * * *', queue: 'default' }],
+    //
+    // P2.3: the `faces` queue runs every minute (suggestions should appear while the kurator is
+    // still at the screen) but with a `limit`, so the one-off full backfill (Task 7) drains at a
+    // fixed, self-throttling rate instead of saturating the box.
+    autoRun: [
+      { cron: '*/15 * * * *', queue: 'default' },
+      { cron: '* * * * *', queue: 'faces', limit: 10 },
+    ],
+    // Final review, H2: `autoRun` ticks inside EVERY `getPayload()` process, including each of
+    // this int suite's own test files — there's no NODE_ENV/similar gate on it otherwise. The
+    // `faces` queue's once-a-minute tick collides with a LIVE `pnpm dev` server (started for the
+    // suite's own HTTP-driven tests) also ticking the same queue independently, both racing this
+    // suite's own explicit `payload.jobs.run()` calls — confirmed directly as the root cause of
+    // the int suite's flaky bare `const [row] = await suggestionsFor(...)` destructures
+    // (Task 6 round 2's report already traced a related symptom, a full Postgres deadlock, to
+    // this exact `autoRun`-vs-explicit-run collision). `jobs.shouldAutoRun` is Payload's own
+    // documented per-instance gate (queues/config/types/index.d.ts) — checked once per tick,
+    // async-capable, and doesn't touch the `autoRun` schedule array itself, so production and
+    // `pnpm dev` behavior are unchanged. Vitest sets `process.env.VITEST = 'true'` on every
+    // process it runs (verified directly), unambiguously distinct from `pnpm dev`'s ordinary
+    // `next dev` (no VITEST var at all) and the container's `NODE_ENV=production` — no test
+    // process should ever ALSO be draining a background cron behind its own back.
+    shouldAutoRun: () => process.env.VITEST !== 'true',
     // Fix round 1 (H2): with no `access` block, every jobs.access.* callback defaults to
     // Payload's `defaultAccess` (`Boolean(user)` — auth/defaultAccess.js) or, on some call
     // sites, an unconditional `() => true` fallback when `access.<op>` itself is undefined

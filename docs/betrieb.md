@@ -110,6 +110,25 @@ docker compose up -d --build   # App + Caddy starten
 Migrationen müssen hier **nicht** erneut laufen — der Dump enthält bereits das komplette
 Schema inklusive der Payload-internen `payload_migrations`-Tabelle.
 
+**Schritt 5 (P2.3 — Gesichtserkennung):** `reconcileHiddenFaceData` einmal manuell auslösen,
+sobald die App wieder läuft. Der Dump aus Schritt 3 enthält auch `face_suggestions` —
+Gesichtsdaten liegen in derselben Datenbank wie alles andere und sind damit ebenso im Backup wie
+jede sonstige Tabelle. Ein Restore kann also Gesichts-Vorlagen (Embeddings) von Personen
+wiederherstellen, deren Einwilligung zwischenzeitlich widerrufen wurde (`hidden: true`) — der
+ursprüngliche Widerruf hat sie bereits transaktional gelöscht (siehe
+`src/hooks/purge-face-data.ts`), aber ein älterer Dump kennt diesen Widerruf noch nicht.
+`reconcileHiddenFaceData` ist idempotent (auf einem gesunden System ein No-op) und löscht
+Gesichtsdaten für JEDE aktuell verborgene Person erneut:
+
+```sh
+# Admin-Login vorausgesetzt (POST /api/payload-jobs ist per jobsCollectionOverrides admin-only):
+curl -X POST http://localhost:3000/api/payload-jobs \
+  -H 'Content-Type: application/json' -H "Cookie: $ADMIN_COOKIE" \
+  -d '{"task": "reconcileHiddenFaceData", "input": {}}'
+# … oder im Admin-UI unter /admin/collections/payload-jobs → „Create New" → Task
+# „reconcileHiddenFaceData" wählen, dann per Cron/„Run Jobs Now" ausführen lassen.
+```
+
 ## Fehlersuche
 
 Wenn ein API-Fehler auftritt (eine fehlgeschlagene Server-Antwort), zeigt Payload in der
@@ -170,6 +189,12 @@ docker compose logs app | grep papierkorb-purge
 Ein Eintrag mit `"failedCount"` > 0 zeigt einzelne fehlgeschlagene Löschungen (z. B. Datei schon
 weg) — die zugehörigen Fehler stehen als separate `papierkorb-purge-errors`-Zeile direkt daneben.
 
+**Hinweis:** `payload_jobs`/`payload_jobs_log`-Zeilen werden nach einem erfolgreichen Lauf
+absichtlich NICHT automatisch gelöscht (`jobs.deleteJobOnComplete: false` in `payload.config.ts` —
+nötig, um einen sonst reproduzierbaren Postgres-Deadlock zwischen zwei gleichzeitig laufenden
+Job-Durchläufen auf derselben Queue zu vermeiden) — die Tabelle wächst unbegrenzt; es gibt aktuell
+keinen eigenen Aufräum-Job dafür.
+
 **Manuell anstoßen** (z. B. um nicht bis 04:00 Uhr zu warten): über die Payload Local API, etwa
 per `docker compose exec app node` mit einem kurzen Skript, das `payload.jobs.queue({ task:
 'purgePapierkorb', input: {} })` gefolgt von `payload.jobs.run()` aufruft — oder einfach bis zum
@@ -207,6 +232,102 @@ Ein paar bewusste Einschränkungen:
   oben) und vergleicht gegen den zum jeweiligen Zeitpunkt vorhandenen Bestand — zwei nahezu
   gleichzeitige Uploads desselben Fotos können sich dadurch gegenseitig verpassen, wenn der zweite
   Upload bereits läuft, bevor der erste vollständig gespeichert ist.
+
+## Gesichtserkennung
+
+Erkennt beim Veröffentlichen eines Fotos automatisch Gesichter darauf und schlägt — sobald ein
+Gesicht einer bereits bestätigten Person hinreichend ähnlich ist — diese Person als Markierung
+vor. **Das ist ausschließlich ein Vorschlag: nichts wird automatisch getaggt, ein Kurator
+bestätigt oder verwirft jeden Vorschlag von Hand** unter `/gesichter`.
+
+Ein/Aus über die Umgebungsvariable `FACE_DETECTION_ENABLED` — **auf dieser Instanz `true`**
+(bewusste Entscheidung des Betreibers). Für andere Deployments dieses Codes ist die empfohlene
+Grundeinstellung `false`, bis eine Datenschutz-Folgenabschätzung (DSFA, siehe unten) vorliegt; der
+Code bleibt dann mit ausgeliefert, aber inaktiv.
+
+**Prüfen, ob es läuft:**
+
+```sh
+docker compose logs app | grep face-detect
+```
+
+zeigt einen Log-Eintrag pro verarbeitetem Foto (Anzahl erkannter Gesichter, Anzahl erzeugter
+Vorschläge). Zusätzlich meldet `/api/health` im Feld `faces` den Bereitschaftsstatus (`"aus"`,
+`"bereit"` oder `"Modell fehlt"`) — das ist rein informativ und **kein Grund für Uptime Kuma zu
+alarmieren**: ein fehlendes Modell verschlechtert nicht `status`/den HTTP-Code der Antwort.
+
+**Aktivierung auf einem bestehenden Archiv:** ein einmaliger Nachtrag holt Gesichtsvorschläge für
+alle bereits veröffentlichten Fotos nach (neu hochgeladene Fotos lösen die Erkennung ohnehin beim
+Veröffentlichen automatisch aus). Ausgelöst als Admin über `POST /api/payload-jobs`:
+
+```sh
+curl -X POST http://localhost:3000/api/payload-jobs \
+  -H 'Content-Type: application/json' -H "Cookie: $ADMIN_COOKIE" \
+  -d '{"task": "backfillFaces", "input": {}}'
+# … oder im Admin-UI unter /admin/collections/payload-jobs → „Create New" → Task
+# „Gesichtserkennung: Archiv nachtragen" wählen.
+```
+
+Das reiht pro veröffentlichtem Foto **einen** Erkennungs-Job in die eigene `faces`-Queue ein und
+drosselt sich selbst über deren Ausführungsrate — bei einem großen Archiv läuft der Rückstand über
+Stunden ab, nicht sofort. Fortschritt beobachten: `"msg":"faces-backfill-enqueued"` im Log zeigt,
+wie viele Fotos eingereiht wurden, danach zeigt die Anzahl offener Vorschläge unter `/gesichter`
+den laufenden Fortschritt der Abarbeitung.
+
+**Datenschutz:** Gesichts-Vorlagen (Embeddings) sind biometrische Daten nach Art. 9 DSGVO. Als
+Einwilligungsgrenze gilt dieselbe `verbergen`-Markierung wie im übrigen Archiv (`People` →
+„Person verbergen (Einwilligung widerrufen)"); bei Minderjährigen entscheiden die
+Erziehungsberechtigten. Die Daten verlassen den Server nicht und werden an keine dritte Stelle
+übermittelt — die Erkennung läuft in-process im `app`-Container, es gibt keinen externen
+Dienstaufruf. Art. 22 DSGVO (automatisierte Einzelentscheidung) greift nicht, weil jeder Vorschlag
+von einem Menschen bestätigt wird, bevor er wirkt. Wird die Funktion aktiviert, muss der Eintrag im
+Verzeichnis von Verarbeitungstätigkeiten festhalten, dass die Aktivierung einen vollständigen
+Nachtrag (Backfill) über den kompletten Altbestand einschließt. Eine schriftliche
+Datenschutz-Folgenabschätzung (DSFA) wird empfohlen.
+
+**Modell-Lizenz:** die verwendeten InsightFace-Gewichte (`buffalo_s`, siehe
+`scripts/fetch-face-models.sh`) stehen laut InsightFace-Model-Zoo „ausschließlich für
+nicht-kommerzielle Forschungszwecke" zur Verfügung — das erfüllt ein Vereinsarchiv wie dieses.
+
+Die Gesichtsdaten liegen in derselben Datenbank wie alles andere und sind deshalb in den
+Sicherungen enthalten. Wird bei einer Person „verbergen" gesetzt, sind im laufenden Betrieb
+**sofort weg**: jeder Vorschlag, der sie als `suggestedPerson` nennt (bestätigt oder abgelehnt),
+UND jeder weitere Vorschlag auf einem Foto, auf dem sie in „Personen" markiert ist — auch wenn
+dieser Vorschlag fälschlich einer anderen Person zugeordnet wurde (Verwechslung bei der
+Bestätigung). Eine Lücke bleibt unvermeidbar, weil sie algorithmisch nicht auflösbar ist: ein noch
+offener, nie bestätigter Vorschlag, dessen Gesicht tatsächlich diese Person zeigt, den aber noch
+niemand ihr zugeordnet und sie auch sonst nirgends auf diesem Foto markiert hat, kann das System
+nicht automatisch mit ihr verknüpfen — er verschwindet erst über den regulären Weg: „Ablehnen",
+die 180-Tage-Frist unten, oder (sobald ein Kurator ihn — richtig oder fälschlich — bestätigt) die
+Löschung beim nächsten „verbergen". In bereits erstellten Sicherungen bleiben gelöschte
+Gesichtsdaten davon unberührt, bis diese Sicherungen turnusmäßig überschrieben werden (30 Tage
+lokal wie ausgelagert). Danach sind sie auch dort verschwunden. **Nach jedem Restore einer älteren
+Sicherung muss „Gesichtsdaten aufräumen" laufen**, sonst leben die gelöschten Daten wieder (Schritt
+5 der Restore-Anleitung oben, `reconcileHiddenFaceData`).
+
+Ein paar bewusste Einschränkungen:
+
+- Eine falsche Bestätigung wird über **„Rückgängig"** unter `/gesichter` korrigiert: der Vorschlag
+  geht zurück auf „offen", und die Person wird — sofern kein anderer bestätigter Vorschlag auf
+  demselben Foto sie noch nennt — auch wieder von diesem Foto abgetaggt. Die gespeicherte
+  Gesichts-Vorlage (Embedding) bleibt dabei **erhalten**: das Gesicht ist ja weiterhin real und
+  könnte erneut zugeordnet werden. Sie verschwindet erst über „Ablehnen" (löscht die Vorlage
+  sofort) oder automatisch nach 180 Tagen, falls der Vorschlag offen bleibt (siehe unten) — nicht
+  durch bloßes Entfernen der Personen-Markierung im Admin-Bereich, das lässt Vorschlag und Vorlage
+  unangetastet.
+- „Rückgängig" auf dem einzigen bestätigten Gesicht einer Person nimmt diese Person wieder aus dem
+  Abgleich heraus — sie erscheint dann bei künftigen Fotos nicht mehr als Vorschlag, bis erneut ein
+  Gesicht von ihr bestätigt wird.
+- Vorschläge sind Best-Effort: schlägt ein Erkennungs-Job fehl, gibt es für dieses Foto einfach
+  keine Vorschläge, kein Fehler wird an Mitglieder oder Kuratoren sichtbar.
+- Der Abgleich ist ein linearer Scan über alle bestätigten Gesichter — das reicht bis in den
+  niedrigen vierstelligen Bereich; ab etwa 10 000 bestätigten Gesichtern braucht es `pgvector`.
+- Unbestätigte Vorschläge verlieren nach 180 Tagen automatisch ihre biometrische Vorlage (siehe
+  „Papierkorb" oben, derselbe Purge-Mechanismus).
+
+**Ressourcenbedarf:** kein zusätzlicher Container und keine höhere RAM-Stufe nötig — zum
+Fußabdruck des Basis-Stacks kommen während eines laufenden Erkennungs-Jobs grob 200–300 MB dazu;
+ein 2-GB-VPS bleibt ausreichend.
 
 ## Monitoring
 

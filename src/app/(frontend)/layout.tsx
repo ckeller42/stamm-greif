@@ -19,6 +19,9 @@ export default async function FrontendLayout({ children }: { children: React.Rea
           <strong style={{ color: 'var(--gold)' }}>{de.siteName}</strong>
           {user && <Link href="/">{de.nav.archiv}</Link>}
           {user && <Link href="/hochladen">{de.nav.hochladen}</Link>}
+          {user && (user.role === 'admin' || user.role === 'kurator') && (
+            <Link href="/gesichter">{de.nav.gesichter}</Link>
+          )}
           {user
             ? <LogoutLink>{de.nav.abmelden}</LogoutLink>
             : <Link href="/anmelden">{de.nav.anmelden}</Link>}

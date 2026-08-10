@@ -14,7 +14,10 @@ import exifReader from 'exif-reader'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
 import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/lib/exif-fill'
+import { facesEnabled } from '@/lib/faces'
+import { modelsPresent } from '@/lib/face-model'
 import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
+import { enqueueDetectFaces } from '@/jobs/detectFaces'
 
 // Spec P2.2: two same-motif scans/re-exports of one slide produce dHashes that differ only in a
 // handful of bits (compression noise, minor recrop) — chosen empirically-plausible per the
@@ -347,6 +350,42 @@ const clearDuplicateFlagsAfterDelete: CollectionAfterDeleteHook = async ({ req, 
   }
 }
 
+// P2.3 Task 6: belt-and-braces alongside the DB FK's `ON DELETE cascade` (hand-edited into the
+// face_suggestions migration — see that migration file's own comment). Payload's relationship
+// field config has no way to express "cascade" itself, only "set null" (its universal default),
+// so `pnpm payload migrate` (which replays the hand-edited SQL literally) is the only path that
+// ever produces the real cascade constraint. `pnpm dev`'s schema push instead diffs the live DB
+// directly against the config-derived schema — always "set null" for this field — and silently
+// reverts the constraint on every dev boot (confirmed directly: `\d face_suggestions` after a dev
+// boot shows `ON DELETE set null`, even immediately after a `migrate` that just set it to
+// `cascade`). Since `photo_id` is NOT NULL, hard-deleting a photo with any face-suggestions rows
+// under that reverted constraint throws a 23502 (not-null violation) — INSIDE the `DELETE FROM
+// photos` statement itself, since the FK action runs as part of that same SQL statement, before
+// Payload's JS-level `afterDelete` hooks ever get a chance to run. That rules out an afterDelete
+// cleanup (verified the hard way: adding one there still failed with the identical 23502 — the
+// delete never reaches JS at all). `beforeDelete` is what actually closes the gap: removing the
+// children first means there is nothing left for the (possibly-reverted) FK action to trip over
+// once the real `DELETE FROM photos` runs. A no-op whenever the real FK cascade would have done
+// the same work anyway (a `migrate`-only production deploy). Same non-fatal-degradation shape as
+// captureDuplicateReferencesBeforeDelete above: a failed cleanup here must not block the delete
+// the user actually asked for.
+const deleteFaceSuggestionsBeforePhotoDelete: CollectionBeforeDeleteHook = async ({ req, id }) => {
+  try {
+    await req.payload.delete({
+      collection: 'face-suggestions',
+      where: { photo: { equals: id } },
+      overrideAccess: true,
+      req,
+    })
+  } catch (err) {
+    req.payload.logger.info({
+      msg: 'face-suggestions-cleanup-skipped',
+      photoId: id,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 // Field-level access has a slightly different arg shape than collection-level Access (id can be
 // string | number), so `isKuratorOrAdmin` from access/roles doesn't structurally match here.
 const isKuratorOrAdminField: FieldAccess = ({ req }) =>
@@ -436,8 +475,39 @@ export const Photos: CollectionConfig = {
     // computePhashOnUpload must run AFTER convertHeicToJpeg (see its own comment above) — the
     // opposite ordering constraint from extractExifOnUpload, which must run BEFORE it.
     beforeOperation: [extractExifOnUpload, convertHeicToJpeg, computePhashOnUpload],
-    beforeDelete: [captureDuplicateReferencesBeforeDelete],
+    beforeDelete: [captureDuplicateReferencesBeforeDelete, deleteFaceSuggestionsBeforePhotoDelete],
     afterDelete: [clearDuplicateFlagsAfterDelete],
+    // P2.3: face detection runs on the draft→published transition, never on a draft. Member
+    // uploads land as drafts and a kurator may delete them unpublished; computing and STORING
+    // biometric templates for photos that get thrown away is processing we can simply not do.
+    // Also covers a replaced file on an already-published photo. Never throws: a failed enqueue
+    // must not fail the publish.
+    afterChange: [
+      async ({ doc, previousDoc, req, operation }) => {
+        if (!facesEnabled()) return
+        // Final review, M5: spec §5's degradation story ("FACE_MODELS_DIR missing/incomplete →
+        // nothing is enqueued") was only half-true before this — `detectFacesHandler` itself
+        // already no-ops when `!modelsPresent()`, but nothing stopped the ENQUEUE from happening
+        // first, leaving a dead `payload_jobs` row (queued, run, produced nothing) behind for
+        // every publish while a model is missing/incomplete. Checking here too means a degraded
+        // deployment doesn't churn the jobs table for work it already knows will be a no-op.
+        if (!modelsPresent()) return
+        const nowPublished = doc._status === 'published'
+        const wasPublished = operation === 'update' && previousDoc?._status === 'published'
+        const fileChanged = wasPublished && doc.filename !== previousDoc?.filename
+        if (!nowPublished || (wasPublished && !fileChanged)) return
+        if (doc.hasHiddenPerson || doc.deletedAt) return
+        try {
+          await enqueueDetectFaces(req, doc.id)
+        } catch (err) {
+          req.payload.logger.error({
+            msg: 'face-detect-enqueue-failed',
+            photoId: doc.id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        }
+      },
+    ],
     beforeChange: [
       async ({ req, data, operation, originalDoc }) => {
         if (operation === 'create' && req.user) {
@@ -482,7 +552,23 @@ export const Photos: CollectionConfig = {
   fields: [
     { name: 'caption', type: 'text', label: 'Beschreibung' },
     ...fuzzyDateFields(),
-    { name: 'people', type: 'relationship', relationTo: 'people', hasMany: true, label: 'Personen' },
+    {
+      name: 'people',
+      type: 'relationship',
+      relationTo: 'people',
+      hasMany: true,
+      label: 'Personen',
+      // Spec §7 ("Untagging is not a deletion path... the `photos.people` field description
+      // points at it") + final review, M4: removing a person here does NOT delete the underlying
+      // face-suggestions row or its embedding — it just edits this list. Fixing a wrong
+      // confirmation belongs on /gesichter ("Rückgängig"), which does clean up the biometric data.
+      admin: {
+        description:
+          'Eine falsche Gesichts-Bestätigung wird über „Rückgängig" unter /gesichter korrigiert, ' +
+          'nicht durch Entfernen einer Person hier — nur „Rückgängig" räumt auch die gespeicherte ' +
+          'Gesichts-Vorlage (Embedding) auf.',
+      },
+    },
     { name: 'event', type: 'relationship', relationTo: 'events', label: 'Ereignis' },
     { name: 'place', type: 'relationship', relationTo: 'places', label: 'Ort' },
     { name: 'tags', type: 'relationship', relationTo: 'tags', hasMany: true, label: 'Schlagwörter' },
