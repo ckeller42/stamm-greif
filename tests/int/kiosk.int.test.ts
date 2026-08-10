@@ -253,4 +253,14 @@ describe('mint/revoke session endpoints — admin-only', () => {
     })
     expect(res.status).toBe(403)
   })
+
+  it('revoking a non-existent sid returns a clean 404, not a 500', async () => {
+    const adminCookie = await loginCookie(adminEmail)
+    const res = await fetch('http://localhost:3000/api/kiosk/session', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ sid: 999_999_999 }),
+    })
+    expect(res.status).toBe(404)
+  })
 })

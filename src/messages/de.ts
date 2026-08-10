@@ -43,6 +43,11 @@ export const de = {
       'Eine Person „verbergen" (unter Personen im Admin-Bereich) löscht deren Gesichtsdaten ' +
       'sofort und unwiderruflich — auch bereits bestätigte Vorschläge.',
   },
+  kiosk: {
+    invalid: 'Dieser Kiosk-Link ist ungültig oder abgelaufen.',
+    empty: 'Zurzeit sind keine Fotos für den Kiosk freigegeben.',
+    scanHint: 'Zum Herunterladen scannen',
+  },
   photos: {
     kioskFreigegeben: {
       label: 'Für Kiosk freigegeben',

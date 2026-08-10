@@ -40,11 +40,21 @@ export async function DELETE(req: Request): Promise<Response> {
   const { sid } = (await req.json().catch(() => ({}))) as { sid?: number }
   if (typeof sid !== 'number') return Response.json({ error: 'sid fehlt' }, { status: 400 })
   const payload = await getPayload({ config })
-  await payload.update({
-    collection: 'kiosk-sessions',
-    id: sid,
-    data: { revokedAt: new Date().toISOString() },
-    overrideAccess: true,
-  })
+  try {
+    await payload.update({
+      collection: 'kiosk-sessions',
+      id: sid,
+      data: { revokedAt: new Date().toISOString() },
+      overrideAccess: true,
+    })
+  } catch (err) {
+    // Revoking a sid that doesn't exist (already deleted, typo, stale admin UI) is a clean 404,
+    // not an unhandled 500 — payload.update throws Payload's own NotFound (status 404) for an
+    // unknown id under overrideAccess:true; any other error is a real failure and still bubbles.
+    if ((err as { status?: number }).status === 404) {
+      return Response.json({ error: 'Nicht gefunden' }, { status: 404 })
+    }
+    throw err
+  }
   return Response.json({ ok: true })
 }

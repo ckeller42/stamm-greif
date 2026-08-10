@@ -36,8 +36,12 @@ export async function GET(req: Request): Promise<Response> {
   if (!photo) return new Response('Not found', { status: 404 })
 
   const dir = path.resolve(process.cwd(), 'photos')
-  const name = photo.filename ?? photo.sizes?.web?.filename
-  if (!name) return new Response('Not found', { status: 404 })
+  const rawName = photo.filename ?? photo.sizes?.web?.filename
+  if (!rawName) return new Response('Not found', { status: 404 })
+  // Defense-in-depth: `name` today only ever comes from Payload's own upload filename, never
+  // attacker input, but path.basename() strips any path separators before the join regardless —
+  // cheap insurance against a future code path that lets filename be influenced upstream.
+  const name = path.basename(rawName)
   let bytes: Buffer
   try {
     bytes = await fs.readFile(path.join(dir, name))
