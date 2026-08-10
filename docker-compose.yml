@@ -33,6 +33,11 @@ services:
       FACE_DETECTION_ENABLED: ${FACE_DETECTION_ENABLED:-true}
       FACE_SIMILARITY_THRESHOLD: ${FACE_SIMILARITY_THRESHOLD:-0.40}
       FACE_DET_THRESHOLD: ${FACE_DET_THRESHOLD:-0.5}
+      # Kiosk (P2.4) — same ${VAR:-default} pass-through pattern as the FACE_* vars above, so an
+      # operator who never sets these still gets the code's own documented defaults (see
+      # .env.example and src/lib/kiosk-session.ts's kioskTtlHours()).
+      KIOSK_LINK_TTL_HOURS: ${KIOSK_LINK_TTL_HOURS:-12}
+      KIOSK_PUBLIC_URL: ${KIOSK_PUBLIC_URL:-}
     volumes:
       # Reality check (Task 14): Photos has no upload.staticDir override, so Payload uses its
       # default (the collection slug, "photos") resolved relative to process.cwd() — /app in

@@ -15,7 +15,7 @@ The organising constraint for both: **the consent model that already governs `Ph
 
 ## 2. Owner decisions (fixed)
 
-1. **Kiosk auth = signed kiosk link + signed downloads.** An admin generates a time-limited signed kiosk URL (HMAC keyed on `PAYLOAD_SECRET`, expiry embedded, verified server-side), reachable **without login**. The slideshow runs from that link. Each photo's QR points to a **signed, expiring direct-download URL**. No standing login lives on the device. The link is **revocable**. Nothing on this surface ever becomes permanently public or search-indexed.
+1. **Kiosk auth = signed kiosk link + signed downloads.** A kurator/admin generates a time-limited signed kiosk URL (HMAC keyed on `PAYLOAD_SECRET`, expiry embedded, verified server-side), reachable **without login**. The slideshow runs from that link. Each photo's QR points to a **signed, expiring direct-download URL**. No standing login lives on the device. The link is **revocable**. Nothing on this surface ever becomes permanently public or search-indexed.
 2. **Kiosk content = curated allowlist.** A kurator/admin explicitly marks a photo kiosk-safe via a new boolean `kioskFreigegeben` on `Photos` (default `false`, kurator/admin-writable). **Only** marked photos are eligible for the kiosk. The allowlist is an **additional restriction, never a bypass**: a marked photo must still pass every existing consent gate — the kiosk query ANDs `kioskFreigegeben` with `published` + `not hidden-person` + `not binned`. Minors'/member-only photos must never reach the public beamer; the curated flag is the **human gate** and kurators must not mark member-only/minor photos (documented in `de.ts` field help + `betrieb.md`).
 
 ## 3. Threat model & the one safety property
