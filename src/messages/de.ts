@@ -1,6 +1,6 @@
 export const de = {
   siteName: 'Stamm-Greif-Archiv',
-  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', gesichter: 'Gesichter', anmelden: 'Anmelden', abmelden: 'Abmelden' },
+  nav: { archiv: 'Archiv', hochladen: 'Foto hochladen', gesichter: 'Gesichter', kiosk: 'Kiosk', anmelden: 'Anmelden', abmelden: 'Abmelden' },
   login: { title: 'Anmelden', email: 'E-Mail', password: 'Passwort', submit: 'Anmelden', error: 'Anmeldung fehlgeschlagen' },
   invite: { title: 'Willkommen beim Stamm-Greif-Archiv', name: 'Dein Name', submit: 'Konto erstellen',
     invalid: 'Diese Einladung ist ungültig oder wurde bereits verwendet.',
@@ -47,6 +47,22 @@ export const de = {
     invalid: 'Dieser Kiosk-Link ist ungültig oder abgelaufen.',
     empty: 'Zurzeit sind keine Fotos für den Kiosk freigegeben.',
     scanHint: 'Zum Herunterladen scannen',
+  },
+  kioskAdmin: {
+    title: 'Kiosk-Links',
+    hint: 'Erzeuge einen signierten Link für den Beamer/Kiosk. Der Link zeigt nur Fotos, die einzeln als „Für Kiosk freigegeben" markiert sind, und läuft nach der gewählten Gültigkeitsdauer automatisch ab.',
+    label: 'Bezeichnung (optional)',
+    hours: 'Gültig für (Stunden)',
+    mint: 'Link erzeugen',
+    open: 'Auf Beamer öffnen',
+    copy: 'Kopieren',
+    copied: 'Kopiert',
+    revoke: 'Widerrufen',
+    active: 'Aktive Links',
+    expiresAt: 'Gültig bis',
+    revoked: 'Widerrufen.',
+    empty: 'Keine aktiven Kiosk-Links.',
+    error: 'Das hat nicht geklappt — bitte erneut versuchen.',
   },
   photos: {
     kioskFreigegeben: {
