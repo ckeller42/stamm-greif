@@ -68,4 +68,50 @@ describe('access matrix', () => {
     const check = await payload.findByID({ collection: 'users', id: mitglied.id, overrideAccess: true })
     expect(check.role).toBe('mitglied')
   })
+
+  // Carried from Task 1/2/3 (P2.4 kiosk): kiosk-sessions is admin-only at the COLLECTION level
+  // (KioskSessions.ts's access block) — kurators mint/revoke only through /api/kiosk/session,
+  // which runs overrideAccess:true; they have no direct CRUD on the collection itself. Regression
+  // net for that, now that Task 4 exercises the collection over HTTP for the first time.
+  it('kiosk-sessions collection is admin-only, even for a kurator', async () => {
+    for (const user of [mitglied, kurator]) {
+      await expect(
+        payload.find({ collection: 'kiosk-sessions', overrideAccess: false, user }),
+      ).rejects.toThrow()
+      await expect(
+        payload.create({
+          collection: 'kiosk-sessions',
+          data: { label: 'x', expiresAt: new Date(Date.now() + 3600_000).toISOString() },
+          overrideAccess: false,
+          user,
+        }),
+      ).rejects.toThrow()
+    }
+    const s = await payload.create({
+      collection: 'kiosk-sessions',
+      data: { label: 'admin-only-check', expiresAt: new Date(Date.now() + 3600_000).toISOString() },
+      overrideAccess: false,
+      user: admin,
+    }) // must not throw
+    expect(s.id).toBeTruthy()
+  })
+
+  // Carried from Task 1/2/3 (P2.4 kiosk): kioskFreigegeben is the human consent gate for the
+  // public beamer (spec §3) — only kurator/admin may set it (Photos.ts field access:
+  // isKuratorOrAdminField). A mitglied editing their own still-draft upload (otherwise a
+  // permitted document-level update, per canUpdatePhoto) must not be able to mark it kiosk-safe
+  // themselves. Same silent-drop-not-throw shape as the role-field test above.
+  it('a mitglied cannot set kioskFreigegeben=true on their own photo', async () => {
+    const photo = await payload.create({
+      collection: 'photos',
+      data: { datePrecision: 'year', dateValue: '1990', _status: 'draft', uploader: mitglied.id } as any,
+      filePath: 'tests/fixtures/dia.jpg',
+      overrideAccess: true,
+    })
+    await payload.update({
+      collection: 'photos', id: photo.id, data: { kioskFreigegeben: true }, overrideAccess: false, user: mitglied,
+    })
+    const check = await payload.findByID({ collection: 'photos', id: photo.id, overrideAccess: true })
+    expect(check.kioskFreigegeben).toBe(false)
+  })
 })

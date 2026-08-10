@@ -5,6 +5,7 @@ import * as migration_20260809_175517_face_suggestions from './20260809_175517_f
 import * as migration_20260809_182337_detect_faces_task from './20260809_182337_detect_faces_task';
 import * as migration_20260809_191236_concurrency_control from './20260809_191236_concurrency_control';
 import * as migration_20260809_200405_face_maintenance_tasks from './20260809_200405_face_maintenance_tasks';
+import * as migration_20260810_104836_kiosk from './20260810_104836_kiosk';
 
 export const migrations = [
   {
@@ -41,5 +42,10 @@ export const migrations = [
     up: migration_20260809_200405_face_maintenance_tasks.up,
     down: migration_20260809_200405_face_maintenance_tasks.down,
     name: '20260809_200405_face_maintenance_tasks',
+  },
+  {
+    up: migration_20260810_104836_kiosk.up,
+    down: migration_20260810_104836_kiosk.down,
+    name: '20260810_104836_kiosk'
   },
 ];

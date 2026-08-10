@@ -69,6 +69,7 @@ export interface Config {
   collections: {
     users: User;
     invites: Invite;
+    'kiosk-sessions': KioskSession;
     people: Person;
     groups: Group;
     memberships: Membership;
@@ -89,6 +90,7 @@ export interface Config {
   collectionsSelect: {
     users: UsersSelect<false> | UsersSelect<true>;
     invites: InvitesSelect<false> | InvitesSelect<true>;
+    'kiosk-sessions': KioskSessionsSelect<false> | KioskSessionsSelect<true>;
     people: PeopleSelect<false> | PeopleSelect<true>;
     groups: GroupsSelect<false> | GroupsSelect<true>;
     memberships: MembershipsSelect<false> | MembershipsSelect<true>;
@@ -194,6 +196,19 @@ export interface Invite {
 }
 /**
  * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "kiosk-sessions".
+ */
+export interface KioskSession {
+  id: number;
+  label?: string | null;
+  expiresAt: string;
+  revokedAt?: string | null;
+  createdBy?: (number | null) | User;
+  updatedAt: string;
+  createdAt: string;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
  * via the `definition` "people".
  */
 export interface Person {
@@ -239,6 +254,10 @@ export interface Photo {
   phash?: string | null;
   duplicateOf?: (number | null) | Photo;
   duplicateSuspected?: boolean | null;
+  /**
+   * Nur für den öffentlichen Beamer/Kiosk freigeben, was wirklich öffentlich gezeigt werden darf. Niemals Fotos von Minderjährigen oder mitglieder-interne Fotos markieren — der Kiosk ist ohne Anmeldung sichtbar. Verborgene, unveröffentlichte oder gelöschte Fotos erscheinen ohnehin nie, auch wenn sie hier markiert sind.
+   */
+  kioskFreigegeben?: boolean | null;
   updatedAt: string;
   createdAt: string;
   _status?: ('draft' | 'published') | null;
@@ -547,6 +566,10 @@ export interface PayloadLockedDocument {
         value: number | Invite;
       } | null)
     | ({
+        relationTo: 'kiosk-sessions';
+        value: number | KioskSession;
+      } | null)
+    | ({
         relationTo: 'people';
         value: number | Person;
       } | null)
@@ -661,6 +684,18 @@ export interface InvitesSelect<T extends boolean = true> {
   role?: T;
   usedBy?: T;
   expiresAt?: T;
+  updatedAt?: T;
+  createdAt?: T;
+}
+/**
+ * This interface was referenced by `Config`'s JSON-Schema
+ * via the `definition` "kiosk-sessions_select".
+ */
+export interface KioskSessionsSelect<T extends boolean = true> {
+  label?: T;
+  expiresAt?: T;
+  revokedAt?: T;
+  createdBy?: T;
   updatedAt?: T;
   createdAt?: T;
 }
@@ -784,6 +819,7 @@ export interface PhotosSelect<T extends boolean = true> {
   phash?: T;
   duplicateOf?: T;
   duplicateSuspected?: T;
+  kioskFreigegeben?: T;
   updatedAt?: T;
   createdAt?: T;
   _status?: T;

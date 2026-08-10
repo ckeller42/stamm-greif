@@ -342,6 +342,45 @@ Ein paar bewusste Einschränkungen:
 Fußabdruck des Basis-Stacks kommen während eines laufenden Erkennungs-Jobs grob 200–300 MB dazu;
 ein 2-GB-VPS bleibt ausreichend.
 
+## Kiosk & Zeitleiste
+
+**Kiosk aufsetzen:** Als Kurator/Admin `/kiosk-admin` öffnen, dort einen Link mit Label und
+Ablaufzeit erzeugen (Ablaufzeit ist auf `KIOSK_LINK_TTL_HOURS` gedeckelt, Standard 12 Stunden)
+und den erzeugten Link auf dem Beamer/Tablet öffnen — dort mit `f` in den Vollbildmodus wechseln.
+Auf dem Gerät selbst ist **kein Login** nötig; der Link trägt die Berechtigung.
+
+**`KIOSK_PUBLIC_URL` setzen:** Die QR-Codes auf dem Beamer müssen von Gäste-Handys erreichbar
+sein. Ist der Server nur unter einem internen Namen (z. B. Tailscale-Hostname/IP) statt unter
+`https://archiv.stamm-greif.de` erreichbar, muss `KIOSK_PUBLIC_URL` in der `.env` auf die
+öffentlich erreichbare Basis-URL gesetzt werden — sonst zeigen die QR-Codes auf eine Adresse, die
+ein Gäste-Handy nicht auflösen kann. Bleibt die Variable leer, wird die Adresse aus dem
+eingehenden Request abgeleitet (funktioniert nur, wenn diese Adresse auch von Gäste-Handys aus
+erreichbar ist).
+
+**Was angezeigt wird — die Konsens-Regel:** Der Kiosk ist die einzige Stelle im System, die ohne
+Anmeldung öffentlich sichtbar ist. Ein Foto erscheint dort **nur**, wenn ein Kurator es
+ausdrücklich als „Für Kiosk freigegeben“ markiert hat **und** es zusätzlich veröffentlicht, nicht
+verborgen (keine verborgene Person markiert) und nicht im Papierkorb ist — die Freigabe ist immer
+eine zusätzliche Einschränkung, niemals ein Umgehen der übrigen Regeln. **Kuratoren dürfen Fotos
+von Minderjährigen oder mitglieder-interne Fotos NICHT für den Kiosk freigeben** — der öffentliche
+Beamer ist die Grenze dessen, was ohne Anmeldung sichtbar werden darf. Wird eine Einwilligung
+widerrufen (Person unter „Personen“ auf „verbergen“ gesetzt), verschwindet das Foto sofort aus
+Slideshow und QR-Downloads — auch aus bereits angezeigten/gescannten QR-Codes, die dann ins Leere
+laufen.
+
+**Link widerrufen:** In `/kiosk-admin` beim jeweiligen Link „Widerrufen“ klicken — der Link ist
+sofort tot, ohne Neustart der App und ohne jede Auswirkung auf Mitglieder-Logins. Links laufen
+unabhängig davon ohnehin nach `KIOSK_LINK_TTL_HOURS` (Standard 12 Stunden) automatisch ab.
+
+**Nichts wird indexiert:** Der Kiosk trägt wie der Rest der App `robots: noindex` — er wird nie
+von Suchmaschinen erfasst, unabhängig davon, wie lange ein Link aktiv ist.
+
+**Zeitleiste (`/zeitleiste`):** Nur für angemeldete Mitglieder, kein öffentlicher Zugriff. Dort
+wählt man eine Ereignisreihe (z. B. „Sommerlager“) und geht Jahr für Jahr durch deren Fotos. Es
+gelten dieselben Konsens-Regeln wie im übrigen Archiv (keine verborgenen Personen, keine
+unveröffentlichten/gelöschten Fotos) — die Zeitleiste hat keine eigene Freigabe-Logik wie der
+Kiosk und ist mit ihm nur über den gemeinsamen Fotobestand verwandt.
+
 ## Monitoring
 
 - **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200
