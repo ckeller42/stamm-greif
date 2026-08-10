@@ -38,7 +38,12 @@ export async function DELETE(req: Request): Promise<Response> {
     return Response.json({ error: 'Nicht berechtigt' }, { status: 403 })
   }
   const { sid } = (await req.json().catch(() => ({}))) as { sid?: number }
-  if (typeof sid !== 'number') return Response.json({ error: 'sid fehlt' }, { status: 400 })
+  // Number.isInteger rejects NaN/Infinity/fractional up front — those would otherwise reach
+  // payload.update as an `id`, fail inside the DB driver, and rethrow as an unhandled 500 instead
+  // of this clean 400.
+  if (typeof sid !== 'number' || !Number.isInteger(sid) || sid <= 0) {
+    return Response.json({ error: 'sid fehlt' }, { status: 400 })
+  }
   const payload = await getPayload({ config })
   try {
     await payload.update({

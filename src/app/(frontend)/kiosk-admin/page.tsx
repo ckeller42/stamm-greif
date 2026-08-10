@@ -20,11 +20,16 @@ export default async function KioskAdminPage() {
   // reading with overrideAccess:false would always get an empty list here. The role check above is
   // already this page's authorization boundary (same posture as the mint/revoke endpoint), so the
   // list query bypasses collection access the same way those endpoints do.
+  // Only LIVE sessions are actionable from this page (revoke on an already-expired session is a
+  // no-op that just clutters the list) — unrevoked AND not yet past expiresAt. pagination:false
+  // so a busy archive with >10 live links (Payload's default page size) doesn't hide/strand older
+  // ones behind pagination the UI below never offers a control for.
   const sessions = await payload.find({
     collection: 'kiosk-sessions',
-    where: { revokedAt: { exists: false } },
+    where: { revokedAt: { exists: false }, expiresAt: { greater_than: new Date().toISOString() } },
     sort: '-createdAt',
     depth: 0,
+    pagination: false,
     overrideAccess: true,
   })
 

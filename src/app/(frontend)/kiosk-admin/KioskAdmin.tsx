@@ -150,7 +150,8 @@ export function KioskAdmin({ sessions, defaultHours }: { sessions: Session[]; de
           <li key={s.id} style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <span>{s.label || '—'}</span>
             <span style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>
-              {de.kioskAdmin.expiresAt}: {new Date(s.expiresAt).toLocaleString('de-DE')}
+              {de.kioskAdmin.expiresAt}:{' '}
+              {new Date(s.expiresAt).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' })}
             </span>
             <button type="button" onClick={() => revoke(s.id)} disabled={revokingId === s.id}>
               {de.kioskAdmin.revoke}

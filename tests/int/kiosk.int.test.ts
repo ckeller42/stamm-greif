@@ -374,4 +374,93 @@ describe('mint/revoke session endpoints — admin-only', () => {
     })
     expect(res.status).toBe(404)
   })
+
+  // Review fix: a non-integer sid (NaN/Infinity/fractional) used to reach payload.update as an
+  // `id`, fail inside the DB driver, and rethrow as an unhandled 500 instead of a clean 400.
+  it.each([
+    ['fractional', 1.5],
+    ['NaN', NaN],
+    ['Infinity', Infinity],
+    ['zero', 0],
+    ['negative', -1],
+  ])('revoking a non-integer sid (%s) returns 400, not a 500', async (_label, sid) => {
+    const adminCookie = await loginCookie(adminEmail)
+    const res = await fetch('http://localhost:3000/api/kiosk/session', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+      body: JSON.stringify({ sid }),
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+// Review fix: /kiosk-admin's server-component list used to run with Payload's default limit (10)
+// and no `pagination:false`, so a busy archive with >10 live sessions would silently hide/strand
+// older ones with no UI control to reach them; it also didn't filter out expired-but-unrevoked
+// sessions, cluttering the list with dead, unactionable links. This mirrors the exact query
+// src/app/(frontend)/kiosk-admin/page.tsx now runs, against the underlying data rather than the
+// rendered page (Local API, not a component render).
+describe('kiosk-admin session list query (page.tsx query shape)', () => {
+  async function listLive(): Promise<{ id: number; label: string | null | undefined }[]> {
+    const r = await payload.find({
+      collection: 'kiosk-sessions',
+      where: { revokedAt: { exists: false }, expiresAt: { greater_than: new Date().toISOString() } },
+      sort: '-createdAt',
+      depth: 0,
+      pagination: false,
+      overrideAccess: true,
+    })
+    return r.docs.map((d) => ({ id: Number(d.id), label: d.label }))
+  }
+
+  it('lists a freshly-minted live session', async () => {
+    const label = `fresh-${Date.now()}`
+    const s = await payload.create({
+      collection: 'kiosk-sessions',
+      data: { label, expiresAt: new Date(validExp).toISOString() },
+      overrideAccess: true,
+    })
+    const ids = (await listLive()).map((d) => d.id)
+    expect(ids).toContain(Number(s.id))
+  })
+
+  it('drops a revoked session off the list', async () => {
+    const s = await payload.create({
+      collection: 'kiosk-sessions',
+      data: { label: 'to-revoke', expiresAt: new Date(validExp).toISOString() },
+      overrideAccess: true,
+    })
+    await payload.update({
+      collection: 'kiosk-sessions',
+      id: s.id,
+      data: { revokedAt: new Date().toISOString() },
+      overrideAccess: true,
+    })
+    const ids = (await listLive()).map((d) => d.id)
+    expect(ids).not.toContain(Number(s.id))
+  })
+
+  it('drops an expired-but-unrevoked session off the list', async () => {
+    const s = await payload.create({
+      collection: 'kiosk-sessions',
+      data: { label: 'expired-unrevoked', expiresAt: new Date(Date.now() - 1000).toISOString() },
+      overrideAccess: true,
+    })
+    const ids = (await listLive()).map((d) => d.id)
+    expect(ids).not.toContain(Number(s.id))
+  })
+
+  it('shows more than 10 live sessions (pagination:false, no default-limit truncation)', async () => {
+    const created = await Promise.all(
+      Array.from({ length: 12 }, (_, i) =>
+        payload.create({
+          collection: 'kiosk-sessions',
+          data: { label: `bulk-${Date.now()}-${i}`, expiresAt: new Date(validExp).toISOString() },
+          overrideAccess: true,
+        }),
+      ),
+    )
+    const ids = (await listLive()).map((d) => d.id)
+    for (const s of created) expect(ids).toContain(Number(s.id))
+  })
 })

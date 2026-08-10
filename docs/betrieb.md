@@ -359,16 +359,16 @@ erreichbar ist).
 
 **Was angezeigt wird — die Konsens-Regel:** Der Kiosk ist die einzige Stelle im System, die ohne
 Anmeldung öffentlich sichtbar ist. Ein Foto erscheint dort **nur**, wenn ein Kurator es
-ausdrücklich als „Für Kiosk freigegeben" markiert hat **und** es zusätzlich veröffentlicht, nicht
+ausdrücklich als „Für Kiosk freigegeben“ markiert hat **und** es zusätzlich veröffentlicht, nicht
 verborgen (keine verborgene Person markiert) und nicht im Papierkorb ist — die Freigabe ist immer
 eine zusätzliche Einschränkung, niemals ein Umgehen der übrigen Regeln. **Kuratoren dürfen Fotos
 von Minderjährigen oder mitglieder-interne Fotos NICHT für den Kiosk freigeben** — der öffentliche
 Beamer ist die Grenze dessen, was ohne Anmeldung sichtbar werden darf. Wird eine Einwilligung
-widerrufen (Person unter „Personen" auf „verbergen" gesetzt), verschwindet das Foto sofort aus
+widerrufen (Person unter „Personen“ auf „verbergen“ gesetzt), verschwindet das Foto sofort aus
 Slideshow und QR-Downloads — auch aus bereits angezeigten/gescannten QR-Codes, die dann ins Leere
 laufen.
 
-**Link widerrufen:** In `/kiosk-admin` beim jeweiligen Link „Widerrufen" klicken — der Link ist
+**Link widerrufen:** In `/kiosk-admin` beim jeweiligen Link „Widerrufen“ klicken — der Link ist
 sofort tot, ohne Neustart der App und ohne jede Auswirkung auf Mitglieder-Logins. Links laufen
 unabhängig davon ohnehin nach `KIOSK_LINK_TTL_HOURS` (Standard 12 Stunden) automatisch ab.
 
@@ -376,7 +376,7 @@ unabhängig davon ohnehin nach `KIOSK_LINK_TTL_HOURS` (Standard 12 Stunden) auto
 von Suchmaschinen erfasst, unabhängig davon, wie lange ein Link aktiv ist.
 
 **Zeitleiste (`/zeitleiste`):** Nur für angemeldete Mitglieder, kein öffentlicher Zugriff. Dort
-wählt man eine Ereignisreihe (z. B. „Sommerlager") und geht Jahr für Jahr durch deren Fotos. Es
+wählt man eine Ereignisreihe (z. B. „Sommerlager“) und geht Jahr für Jahr durch deren Fotos. Es
 gelten dieselben Konsens-Regeln wie im übrigen Archiv (keine verborgenen Personen, keine
 unveröffentlichten/gelöschten Fotos) — die Zeitleiste hat keine eigene Freigabe-Logik wie der
 Kiosk und ist mit ihm nur über den gemeinsamen Fotobestand verwandt.
