@@ -43,4 +43,13 @@ export const de = {
       'Eine Person „verbergen" (unter Personen im Admin-Bereich) löscht deren Gesichtsdaten ' +
       'sofort und unwiderruflich — auch bereits bestätigte Vorschläge.',
   },
+  photos: {
+    kioskFreigegeben: {
+      label: 'Für Kiosk freigegeben',
+      help: 'Nur für den öffentlichen Beamer/Kiosk freigeben, was wirklich öffentlich gezeigt ' +
+        'werden darf. Niemals Fotos von Minderjährigen oder mitglieder-interne Fotos markieren — ' +
+        'der Kiosk ist ohne Anmeldung sichtbar. Verborgene, unveröffentlichte oder gelöschte ' +
+        'Fotos erscheinen ohnehin nie, auch wenn sie hier markiert sind.',
+    },
+  },
 } as const

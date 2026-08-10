@@ -13,6 +13,7 @@ import { Events } from './collections/Events'
 import { FaceSuggestions } from './collections/FaceSuggestions'
 import { Groups } from './collections/Groups'
 import { Invites } from './collections/Invites'
+import { KioskSessions } from './collections/KioskSessions'
 import { Memberships } from './collections/Memberships'
 import { People } from './collections/People'
 import { Photos } from './collections/Photos'
@@ -50,7 +51,7 @@ const configPromise = buildConfig({
   i18n: { supportedLanguages: { de, en }, fallbackLanguage: 'de' },
   // Users is a scaffold default required for admin auth (admin.user binds to it).
   // Invites powers invite-only onboarding (POST /api/invites/accept).
-  collections: [Users, Invites, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance, Photos, FaceSuggestions],
+  collections: [Users, Invites, KioskSessions, People, Groups, Memberships, Events, EventSeries, Places, Tags, Attendance, Photos, FaceSuggestions],
   editor: lexicalEditor(),
   secret,
   // Structured JSON logs to stdout (pino). Without this Payload is near-silent in the

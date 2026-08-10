@@ -13,6 +13,7 @@ import sharp from 'sharp'
 import exifReader from 'exif-reader'
 import { isAdmin } from '@/access/roles'
 import { fuzzyDateFields } from '@/fields/fuzzy-date'
+import { de } from '@/messages/de'
 import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/lib/exif-fill'
 import { facesEnabled } from '@/lib/faces'
 import { modelsPresent } from '@/lib/face-model'
@@ -684,6 +685,22 @@ export const Photos: CollectionConfig = {
       label: 'Mögliches Duplikat',
       admin: { readOnly: true, position: 'sidebar' },
       access: { read: canReadDuplicateSuspected, create: () => false, update: () => false },
+    },
+    // P2.4 (kiosk allowlist). A kurator/admin explicitly marks a photo kiosk-safe; ONLY marked
+    // photos are eligible for the public beamer — and even then only if they still pass every
+    // other consent gate (see src/lib/kiosk-query.ts's kioskPhotoWhere(): this flag is always an
+    // extra AND term, never a bypass). Read is open (the boolean is harmless); writes are
+    // kurator/admin-only, the same gate as duplicate/exif fields above. The human rule the flag
+    // encodes — never mark member-only/minor photos for the public beamer — lives in the admin
+    // help text and betrieb.md; the code can only enforce "marked AND still-consented", not the
+    // curator's judgement about which photos are safe to mark.
+    {
+      name: 'kioskFreigegeben',
+      type: 'checkbox',
+      defaultValue: false,
+      label: de.photos.kioskFreigegeben.label,
+      admin: { description: de.photos.kioskFreigegeben.help, position: 'sidebar' },
+      access: { create: isKuratorOrAdminField, update: isKuratorOrAdminField },
     },
   ],
 }
