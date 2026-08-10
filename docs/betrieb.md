@@ -66,9 +66,22 @@ beim allerersten Start das komplette Schema an (siehe `migrate`-Befehl oben).
 **Bei künftigen Code-Änderungen, die Collections/Felder ändern:** vor dem Deploy lokal
 `pnpm payload migrate:create` gegen eine Kopie der Produktionsdaten (oder einfach die lokale
 Dev-DB) laufen lassen, die erzeugte Datei in `src/migrations/` committen, und nach dem Pull auf
-dem Server erneut `docker compose run --rm migrate` ausführen — **vor** dem
+dem Server erneut den Migrations-Befehl ausführen — **vor** dem
 Neustart der App (`docker compose up -d --build`). Der `migrate`-Service ist bewusst kein Teil
 von `docker compose up`, damit er nie versehentlich automatisch mitläuft.
+
+**Wichtig — das `migrate`-Image zuerst neu bauen:** `docker compose run` verwendet ein
+zwischengespeichertes Image; ohne Neubau laufen die neuen Migrationsdateien nicht mit und die
+Migration meldet fälschlich „Done", ohne etwas anzuwenden. Nach jedem `git pull` daher immer:
+
+```sh
+docker compose build migrate            # neuen Quellcode ins migrate-Image übernehmen
+docker compose run --rm migrate         # ausstehende Migrationen anwenden
+docker compose up -d --build            # App + Caddy neu bauen und starten
+```
+
+Zur Kontrolle, dass alles angewendet wurde:
+`docker compose exec db psql -U archiv -d archiv -c "SELECT name FROM payload_migrations ORDER BY id;"`
 
 ## Backup
 
