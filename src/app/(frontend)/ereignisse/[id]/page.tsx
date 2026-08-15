@@ -38,6 +38,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
     <>
       <h1>{event.name}</h1>
       <p style={{ color: 'var(--muted)' }}>{label}{place && ` · ${place.name}`}</p>
+      {isKurator && <p><Link href={`/fotobuch?type=event&id=${id}`}>{de.fotobuch.createBook}</Link></p>}
       {event.story && <RichText data={event.story} />}
 
       <h2>{de.event.teilnehmer}</h2>

@@ -28,6 +28,9 @@ export default async function PersonPage({ params }: { params: Promise<{ id: str
   return (
     <>
       <h1>{person.name}</h1>
+      {/* Suppressed for a hidden person: their withdrawn consent means no book (spec §3) — the
+          endpoint refuses it outright, so offering the entry link here would just dead-end. */}
+      {isKurator && !person.hidden && <p><Link href={`/fotobuch?type=person&id=${id}`}>{de.fotobuch.createBook}</Link></p>}
       {person.bio && <p>{person.bio}</p>}
 
       <h2>{de.person.gruppen}</h2>
