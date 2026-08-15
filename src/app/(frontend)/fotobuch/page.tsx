@@ -3,7 +3,11 @@ import config from '@payload-config'
 import { notFound, redirect } from 'next/navigation'
 import { getUser } from '@/lib/get-user'
 import { de } from '@/messages/de'
-import { collectFotobuchPhotos, type FotobuchTargetType } from '@/lib/fotobuch-query'
+import {
+  collectFotobuchPhotos,
+  FotobuchHiddenPersonError,
+  type FotobuchTargetType,
+} from '@/lib/fotobuch-query'
 import { FotobuchForm } from './FotobuchForm'
 
 export const dynamic = 'force-dynamic'
@@ -34,7 +38,26 @@ export default async function FotobuchPage({
   }
 
   const payload = await getPayload({ config })
-  const photos = await collectFotobuchPhotos(payload, { type: type as FotobuchTargetType, id: parsedId })
+  let photos
+  try {
+    photos = await collectFotobuchPhotos(payload, { type: type as FotobuchTargetType, id: parsedId })
+  } catch (err) {
+    // A person's consent can be withdrawn (People.hidden set) after the entry link was rendered —
+    // the link is already suppressed for a hidden subject (see personen/[id]/page.tsx), but this
+    // page is reachable directly by URL, so the refusal has to be handled here too, not just
+    // upstream. Without this, collectFotobuchPhotos' FotobuchHiddenPersonError would propagate
+    // uncaught into a raw Next error page — no data leak, but a confusing crash instead of the
+    // same friendly refusal the /api/fotobuch endpoint gives (Task 5).
+    if (err instanceof FotobuchHiddenPersonError) {
+      return (
+        <>
+          <h1>{de.fotobuch.title}</h1>
+          <p>{de.fotobuch.refusedHidden}</p>
+        </>
+      )
+    }
+    throw err
+  }
 
   return (
     <>

@@ -381,6 +381,46 @@ gelten dieselben Konsens-Regeln wie im übrigen Archiv (keine verborgenen Person
 unveröffentlichten/gelöschten Fotos) — die Zeitleiste hat keine eigene Freigabe-Logik wie der
 Kiosk und ist mit ihm nur über den gemeinsamen Fotobestand verwandt.
 
+## Fotobuch (PDF-Export)
+
+Kurator:innen und Admins erzeugen aus einem Ereignis, einer Ereignisreihe oder einer Person ein
+druckfertiges A4-PDF (Titel, Geschichte/Notizen, Fotoraster in Datumsreihenfolge; das Personen-Buch
+enthält zusätzlich die Gruppen- und Ereignis-Geschichte der Person).
+
+**So geht's:** Auf einer Ereignis- oder Personenseite „Buch erstellen" wählen (oder direkt
+`/fotobuch?type=event&id=…` bzw. `type=series` / `type=person` öffnen). Einzelne Fotos lassen sich
+per Häkchen „Ausschließen" weglassen. „PDF erzeugen" lädt die Datei herunter.
+
+**Konsens-Regel (wichtig):** Das Buch enthält **ausschließlich veröffentlichte, nicht verborgene
+und nicht gelöschte Fotos** — und zwar unabhängig davon, wer es erzeugt. Ein Kurator sieht in der
+App zwar auch Fotos verborgener Personen; im PDF erscheinen sie **nie**, denn die Datei verlässt das
+System und bekommt denselben Konsens-Maßstab wie der öffentliche Beamer. **Ein Foto einer
+verborgenen Person taucht in keinem Buch auf — auch dann nicht, wenn es nicht ausdrücklich
+ausgeschlossen wurde — und für eine verborgene Person lässt sich gar kein Buch erstellen.**
+Das Ausschließen kann nur weglassen, niemals etwas hinzufügen.
+
+**Achtung Freitext (Kuratoren-Pflicht):** Die Konsens-Regel oben filtert nur **Fotos**. Bildunterschriften,
+die Ereignis-Geschichte und die Personen-Biografie sind freier Text, den Mitglieder/Kuratoren selbst
+geschrieben haben — und könnten eine verborgene Person **namentlich** erwähnen, ohne dass das System
+das erkennen oder herausfiltern kann. Es gibt hierfür **keinen automatischen Filter**. Vor dem
+Erzeugen eines Buchs kurz die Geschichte/Bildunterschriften auf Namen verborgener Personen
+durchsehen — das bleibt in der Verantwortung der Kuratorin/des Kurators.
+
+**Ein paar bewusste Einschränkungen:**
+- Höchstens 300 Fotos pro Buch (`FOTOBUCH_MAX_PHOTOS`, ein fester Wert im Code, keine `.env`-Variable
+  — älteste zuerst; bei mehr wird auf dem Titel darauf hingewiesen).
+- Die Reihenfolge ist fest (chronologisch, älteste zuerst) — kein manuelles Umsortieren in v1.
+- Die Geschichte wird als **einfacher Text** übernommen (kein Fett/Kursiv, keine Links/Listen in v1).
+- Das Titelbild wird automatisch gewählt (das älteste Foto).
+- Umlaute im Dateinamen der heruntergeladenen PDF werden zu `_` (ASCII-only
+  `Content-Disposition`-Fallback) — die Datei selbst (Inhalt, Bildunterschriften) stellt Umlaute
+  korrekt dar.
+- Fotos werden für den Druck verkleinert eingebettet.
+
+**Technik:** Der Export läuft im laufenden App-Prozess über `@react-pdf/renderer` — kein Browser,
+kein zusätzlicher Container, keine zusätzliche RAM-Stufe (nur die üblichen paar MB je Buch während
+der Erzeugung). Ein 2-GB-VPS reicht weiterhin.
+
 ## Monitoring
 
 - **Erreichbarkeit:** Uptime-Ping auf `https://archiv.stamm-greif.de/api/health` (HTTP 200
