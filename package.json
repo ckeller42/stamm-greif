@@ -25,6 +25,7 @@
     "@payloadcms/richtext-lexical": "3.87.0",
     "@payloadcms/translations": "3.87.0",
     "@payloadcms/ui": "3.87.0",
+    "@react-pdf/renderer": "^4.6.1",
     "cross-env": "^7.0.3",
     "dotenv": "16.4.7",
     "exif-reader": "^2.0.3",

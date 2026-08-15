@@ -193,6 +193,18 @@ jobs:
             'ls /app/node_modules/.pnpm/onnxruntime-web@*/node_modules/onnxruntime-web/dist/*.wasm >/dev/null' \
             && echo "onnxruntime-web wasm shipped"
 
+      # P2.5 Fotobuch (Task 4 report): a clean `pnpm build` traces @react-pdf/renderer + yoga's
+      # base64-inlined wasm into .next/standalone automatically, no outputFileTracingIncludes
+      # needed — but that was proven with a temporary probe route, not the shipped image. This is
+      # the permanent equivalent of the onnxruntime-web check above: run the render probe against
+      # the actual built image's node_modules, not host node_modules, so a future Next/yoga upgrade
+      # that silently drops the traced wasm asset fails CI loudly instead of shipping a build whose
+      # only symptom is "PDF generation throws in production".
+      - name: Verify @react-pdf/renderer renders in the built image
+        run: |
+          docker compose run --rm --no-deps --entrypoint sh app -c \
+            'node /app/scripts/probe-fotobuch.mjs'
+
       - name: Boot stack and migrate
         run: |
           docker compose -f docker-compose.yml -f docker-compose.local.yml up -d db
