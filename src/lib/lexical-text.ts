@@ -4,12 +4,18 @@
 // so it lives in src/lib and is covered by test:unit's src/lib/** include.
 type LexNode = { type?: string; text?: string; children?: unknown; [k: string]: unknown }
 
-function nodeText(node: unknown): string {
+// Real Payload data can't nest this deep or cycle (richText is stored as JSON, which can't encode
+// cycles), but the contract is never-throw — a depth cap stops a pathological or malformed tree
+// from blowing the call stack (RangeError) instead of returning text.
+const MAX_DEPTH = 500
+
+function nodeText(node: unknown, depth = 0): string {
+  if (depth > MAX_DEPTH) return ''
   if (typeof node !== 'object' || node === null) return ''
   const n = node as LexNode
   if (n.type === 'linebreak') return '\n'
   if (typeof n.text === 'string') return n.text
-  if (Array.isArray(n.children)) return (n.children as unknown[]).map(nodeText).join('')
+  if (Array.isArray(n.children)) return (n.children as unknown[]).map((c) => nodeText(c, depth + 1)).join('')
   return ''
 }
 

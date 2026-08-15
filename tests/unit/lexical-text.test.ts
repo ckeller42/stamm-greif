@@ -94,6 +94,16 @@ describe('lexicalToPlainText', () => {
     expect(lexicalToPlainText({ root: { type: 'root', children: null } })).toBe('')
   })
 
+  it('never throws on a pathologically deep tree (>600 levels), depth-capped', () => {
+    let node: { type: string; children: unknown[] } = { type: 'text-holder', children: [{ type: 'text', text: 'tief' }] }
+    for (let i = 0; i < 600; i++) {
+      node = { type: 'wrap', children: [node] }
+    }
+    const deepState = state([node])
+    expect(() => lexicalToPlainText(deepState)).not.toThrow()
+    expect(typeof lexicalToPlainText(deepState)).toBe('string')
+  })
+
   it('returns empty string for a totally malformed state (never throws)', () => {
     expect(() => lexicalToPlainText('just a string')).not.toThrow()
     expect(lexicalToPlainText('just a string' as unknown)).toBe('')
