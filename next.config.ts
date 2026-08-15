@@ -42,7 +42,18 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     '/**': ['./node_modules/.pnpm/onnxruntime-web@*/node_modules/onnxruntime-web/dist/**'],
   },
-  serverExternalPackages: ['onnxruntime-web'],
+  // @react-pdf/renderer (P2.5 Fotobuch PDF export, Task 1): pure JS + yoga-layout's WASM layout
+  // engine, no native addon (verified via a musl-alpine container probe — see
+  // task-1-report.md). Unlike onnxruntime-web, yoga's wasm binary is base64-inlined inside a
+  // plain ESM module (dist/binaries/yoga-wasm-base64-esm.js), loaded via a normal `import`
+  // rather than a runtime node:fs read of a separate .wasm file — so Next's file tracer should
+  // pick it up like any other JS module dependency, without needing the onnxruntime-web-style
+  // outputFileTracingIncludes escape hatch below. Left unverified against the standalone-traced
+  // bundle here: nothing in app code imports @react-pdf/renderer yet for the tracer to trace
+  // from (that lands with the actual PDF-generation route in a later task) — do not add an
+  // outputFileTracingIncludes entry speculatively; only add one if that later task's docker
+  // build render-check actually shows the wasm asset missing from `.next/standalone`.
+  serverExternalPackages: ['onnxruntime-web', '@react-pdf/renderer'],
   images: {
     localPatterns: [
       {
