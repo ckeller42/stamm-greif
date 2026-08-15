@@ -1,6 +1,26 @@
 import type { Payload, Where } from 'payload'
 import type { Photo } from '@/payload-types'
 
+// The exact, narrow shape the durable PDF export is allowed to carry (Task 5's hardening review,
+// defense-in-depth): the underlying `find` is overrideAccess:true, so it bypasses field-level
+// access control too — without an explicit `select`, the returned docs would carry exifLat/
+// exifLng (member home GPS, kurator/admin-only elsewhere), phash, exifTakenAt etc. straight into
+// a file that leaves the system. `select` (below) is what actually enforces this; this type is
+// its accurate TypeScript mirror, not a superset cast of the full generated `Photo`.
+export type FotobuchPhoto = Pick<
+  Photo,
+  'id' | 'caption' | 'datePrecision' | 'dateValue' | 'dateSortKey' | 'filename' | 'sizes'
+>
+
+const FOTOBUCH_PHOTO_SELECT = {
+  caption: true,
+  datePrecision: true,
+  dateValue: true,
+  dateSortKey: true,
+  filename: true,
+  sizes: true,
+} as const
+
 // A single event/series/person book is bounded to dozens–low-hundreds of photos; this cap bounds
 // worst-case render work and memory so generation stays a safe synchronous request (spec §6.5).
 // A module constant, not an env var, deliberately — keeps .env stable (a stated non-goal).
@@ -48,15 +68,20 @@ export function fotobuchPhotoWhere(): Where {
  *   canReadPhoto short-circuits to `true` and must not decide what enters a durable file).
  * - `excludeIds` is subtracted in code AFTER the query — it can only REMOVE. It is never merged
  *   into the `where`, so it can never re-admit a hidden-person / draft / binned photo.
- * - Ordered oldest→newest so the book reads chronologically; the cover is the first (oldest) photo.
+ * - Ordered oldest→newest, `dateSortKey` then `id` as a deterministic tiebreaker — photos routinely
+ *   share a fuzzy dateSortKey (year/decade precision), and without a secondary key Postgres orders
+ *   ties arbitrarily, making both the 300-cap boundary and the cover-photo pick (first of the
+ *   result) nondeterministic across otherwise-identical requests.
  * - For a PERSON subject whose consent has been withdrawn (People.hidden === true), the whole book
  *   is refused (FotobuchHiddenPersonError) rather than silently returning an (empty-looking, or
  *   partially-populated from stale references) photo set — see the class doc above.
+ * - Returns only `FotobuchPhoto`'s narrow field set (see its doc above) via an explicit `select` —
+ *   NOT the full `Photo` shape, deliberately, even though the query runs overrideAccess:true.
  */
 export async function collectFotobuchPhotos(
   payload: Payload,
   args: { type: FotobuchTargetType; id: number; excludeIds?: number[] },
-): Promise<Photo[]> {
+): Promise<FotobuchPhoto[]> {
   const { type, id, excludeIds = [] } = args
 
   let subject: Where
@@ -75,7 +100,11 @@ export async function collectFotobuchPhotos(
       disableErrors: true,
     })
     if (person?.hidden) throw new FotobuchHiddenPersonError(id)
-    subject = { people: { contains: id } }
+    // `in` is the documented relationship-field operator (see src/hooks/sync-hidden-photos.ts's
+    // photoIdsOfPerson, the central hidden-person control this mirrors): `contains` is a text/LIKE
+    // operator that happens to also match here under the current adapter but isn't guaranteed to
+    // on another one. This IS the load-bearing consent artifact, so it uses the same operator.
+    subject = { people: { in: [id] } }
   } else {
     // Series: photos are linked to a single `event`, not to a series directly — so resolve the
     // series' events first, then photos whose event is one of them. Two explicit steps rather than
@@ -96,12 +125,13 @@ export async function collectFotobuchPhotos(
   const res = await payload.find({
     collection: 'photos',
     where: { and: [subject, fotobuchPhotoWhere()] },
-    sort: 'dateSortKey', // ascending — oldest first
+    sort: ['dateSortKey', 'id'], // ascending — oldest first, id as a deterministic tiebreaker
     limit: FOTOBUCH_MAX_PHOTOS,
-    depth: 0,
+    depth: 0, // relations stay as bare ids — fine, FotobuchPhoto has none of them selected anyway
+    select: FOTOBUCH_PHOTO_SELECT,
     overrideAccess: true,
   })
 
   const exclude = new Set(excludeIds.map(String))
-  return res.docs.filter((p) => !exclude.has(String(p.id))) as Photo[]
+  return res.docs.filter((p) => !exclude.has(String(p.id))) as FotobuchPhoto[]
 }
