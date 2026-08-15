@@ -88,7 +88,6 @@ export const de = {
     generate: 'PDF erzeugen',
     generating: 'wird erzeugt …',
     error: 'Das hat nicht geklappt — bitte erneut versuchen.',
-    empty: 'Für dieses Ziel sind keine Fotos freigegeben.',
     emptyPhotos: 'Keine Fotos.',
     storyEvent: 'Geschichte',
     storySeries: 'Beschreibung',

@@ -18,6 +18,36 @@ import type { Photo } from '@/payload-types'
 
 export const dynamic = 'force-dynamic'
 
+// Bounded-concurrency map: runs `fn` over `items` with at most `limit` in flight at once,
+// preserving input order in the result array (each worker writes back by its own index, so
+// completion order never matters). photoToJpegBuffer() does an fs.readFile + a full sharp
+// decode/resize/encode pipeline per photo — letting all of them (up to FOTOBUCH_MAX_PHOTOS = 300)
+// run at once would fan out ~300 concurrent pipelines (~150MB+ of transient buffers) on a 2GB
+// VPS. A fixed batch of 8 keeps peak memory bounded without adding a dependency (CodeRabbit
+// review, PR #23).
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length)
+  let next = 0
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const i = next++
+      results[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return results
+}
+
+// RFC 5987 percent-encoding for the Content-Disposition filename*= extended parameter.
+// encodeURIComponent() covers most of it but — unlike the RFC's attr-char set — leaves
+// ' ( ) * unescaped, so those four are escaped explicitly on top. This is what lets the
+// downloaded file keep its real (possibly umlaut-carrying) name in browsers that honour
+// filename*=, while the plain filename= alongside it stays the ASCII-sanitized fallback for
+// clients that don't (CodeRabbit review, PR #23).
+function encodeRfc5987(value: string): string {
+  return encodeURIComponent(value).replace(/['()*]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase())
+}
+
 // POST /api/fotobuch  { type: 'event'|'series'|'person', id, excludeIds? } → application/pdf.
 // A Next route handler (the /api/health, /api/kiosk/* class — wins over Payload's /api/[...slug]
 // catchall; there is no `fotobuch` collection). Kurator/admin only. The consent filter is
@@ -116,7 +146,7 @@ export async function POST(req: Request): Promise<Response> {
     throw err
   }
 
-  const images = await Promise.all(photos.map((p) => photoToJpegBuffer(p as Photo, payload.logger)))
+  const images = await mapWithConcurrency(photos, 8, (p) => photoToJpegBuffer(p as Photo, payload.logger))
   const toImage = (buf: Buffer | null): FotobuchImage => (buf ? { data: buf, format: 'jpg' } : null)
 
   const book: FotobuchBook = {
@@ -138,11 +168,15 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const pdf = await renderFotobuchPdf(book)
-  const filename = (filenameBase.trim().replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '') || 'fotobuch') + '.pdf'
+  // ASCII-only fallback (what every client honours) plus an RFC 5987 filename*=UTF-8'' extended
+  // parameter (what modern browsers actually use) so umlauts in the subject's name survive into
+  // the downloaded filename instead of being mangled to underscores (CodeRabbit review, PR #23).
+  const asciiFilename = (filenameBase.trim().replace(/[^\w.\-]+/g, '_').replace(/^_+|_+$/g, '') || 'fotobuch') + '.pdf'
+  const utf8Filename = (filenameBase.trim().replace(/[\r\n\x00-\x1f]+/g, ' ').trim() || 'fotobuch') + '.pdf'
   return new Response(pdf as unknown as BodyInit, {
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Disposition': `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeRfc5987(utf8Filename)}`,
       'Cache-Control': 'no-store',
     },
   })

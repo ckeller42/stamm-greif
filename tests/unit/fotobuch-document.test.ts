@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import path from 'node:path'
 import { readFile } from 'node:fs/promises'
-import { renderFotobuchPdf, type FotobuchBook, type FotobuchImage } from '@/lib/fotobuch-document'
+import {
+  renderFotobuchPdf,
+  renderablePhotos,
+  type FotobuchBook,
+  type FotobuchImage,
+  type FotobuchPhoto,
+} from '@/lib/fotobuch-document'
 
 const fixture = path.resolve(process.cwd(), 'tests/fixtures/dia.jpg')
 
@@ -44,7 +50,7 @@ describe('renderFotobuchPdf', () => {
       truncatedNote: 'Aus 320 Fotos wurden 300 ausgewählt.',
       photos: [
         { image, caption: 'Lagerfeuer', dateLabel: '12.08.1989' },
-        { image: null, caption: null, dateLabel: '1989er Jahre' }, // missing file → cell omits <Image>
+        { image: null, caption: null, dateLabel: '1989er Jahre' }, // missing file → dropped entirely (renderablePhotos)
       ],
     })
     const buf = await renderFotobuchPdf(book)
@@ -93,5 +99,47 @@ describe('renderFotobuchPdf', () => {
     }))
     const buf = await renderFotobuchPdf(baseBook({ photos }))
     expectValidPdf(buf)
+  })
+
+  // CodeRabbit review (PR #23): a null-image entry (photoToJpegBuffer's soft skip for a
+  // missing/undecodable file) must never reach the grid as a broken/blank cell, and an
+  // all-null-image photo set must be treated as empty rather than a grid of blanks.
+  it('renders a book whose every photo failed to transcode as the empty state, not blank cells', async () => {
+    const book = baseBook({
+      photos: [
+        { image: null, caption: 'verloren', dateLabel: '1989' },
+        { image: null, caption: null, dateLabel: '1990' },
+      ],
+    })
+    // No PDF content parser here (see the module doc on renderablePhotos) — the direct,
+    // introspectable assertion is on the pure filter itself, below. This just proves the render
+    // path doesn't throw when handed an all-null-image list.
+    const buf = await renderFotobuchPdf(book)
+    expectValidPdf(buf)
+  })
+})
+
+describe('renderablePhotos', () => {
+  const image: FotobuchImage = { data: Buffer.from('fake'), format: 'jpg' }
+
+  it('keeps only photos with a real image, in original order', () => {
+    const photos: FotobuchPhoto[] = [
+      { image, caption: 'a', dateLabel: '1' },
+      { image: null, caption: 'b (missing file)', dateLabel: '2' },
+      { image, caption: 'c', dateLabel: '3' },
+    ]
+    expect(renderablePhotos(photos).map((p) => p.caption)).toEqual(['a', 'c'])
+  })
+
+  it('returns an empty array when every photo is missing its image', () => {
+    const photos: FotobuchPhoto[] = [
+      { image: null, caption: 'a', dateLabel: '1' },
+      { image: null, caption: 'b', dateLabel: '2' },
+    ]
+    expect(renderablePhotos(photos)).toEqual([])
+  })
+
+  it('returns an empty array for an empty input (person/event book with zero photos)', () => {
+    expect(renderablePhotos([])).toEqual([])
   })
 })

@@ -10,11 +10,25 @@ export type FotobuchImage = { data: Buffer; format: 'jpg' } | null
 // import them under distinct aliases.
 export type FotobuchPhoto = { image: FotobuchImage; caption: string | null; dateLabel: string }
 
+// A FotobuchPhoto proven (by renderablePhotos()'s type-guard filter below) to carry a real image.
+type RenderablePhoto = FotobuchPhoto & { image: NonNullable<FotobuchImage> }
+
 export type FotobuchHistory = {
   gruppenHeading: string
   memberships: string[] // preformatted "Sippe Rotmilan · Sippenführer · 1985–1989"
   ereignisseHeading: string
   events: string[]
+}
+
+// A photo whose image transcode failed (missing/undecodable file — photoToJpegBuffer()'s soft
+// skip) has nothing left to show: no caption/date pair is meaningful without the picture it
+// belongs to. Filtering these out — rather than rendering an empty cell — is what makes a missing
+// file silently drop from the book instead of leaving a visible gap, and what makes an
+// all-missing photo set correctly hit the "no photos" empty state instead of a grid of blanks
+// (CodeRabbit review, PR #23). Exported so this can be unit-tested directly, independent of
+// parsing the rendered PDF's content.
+export function renderablePhotos(photos: FotobuchPhoto[]): RenderablePhoto[] {
+  return photos.filter((p): p is RenderablePhoto => p.image !== null)
 }
 
 export type FotobuchBook = {
@@ -55,6 +69,8 @@ const styles = StyleSheet.create({
 // chronological captioned photo grid. A4, German copy supplied by the caller, built-in Helvetica
 // (WinAnsi covers German umlauts + en-dash — Task 1's probe confirmed this, no embedded font).
 export async function renderFotobuchPdf(book: FotobuchBook): Promise<Buffer> {
+  // Missing/undecodable-file entries never reach the grid — see renderablePhotos()'s doc above.
+  const photos = renderablePhotos(book.photos)
   const doc = (
     <Document title={book.title}>
       {/* Cover */}
@@ -65,7 +81,10 @@ export async function renderFotobuchPdf(book: FotobuchBook): Promise<Buffer> {
           {book.subtitle ? <Text style={styles.subtitle}>{book.subtitle}</Text> : null}
           {book.truncatedNote ? <Text style={styles.note}>{book.truncatedNote}</Text> : null}
         </View>
-        <Text style={styles.footer}>{book.footer}</Text>
+        {/* `fixed` repeats this on every page react-pdf paginates to (spec: the photo grid page
+            can wrap across many pages) — without it, only the FIRST page of a wrapped section
+            would carry the footer (CodeRabbit review, PR #23). */}
+        <Text style={styles.footer} fixed>{book.footer}</Text>
       </Page>
 
       {/* Story / bio + person history */}
@@ -91,26 +110,27 @@ export async function renderFotobuchPdf(book: FotobuchBook): Promise<Buffer> {
               ))}
             </View>
           ) : null}
+          <Text style={styles.footer} fixed>{book.footer}</Text>
         </Page>
       )}
 
       {/* Photo grid — react-pdf paginates automatically via wrap */}
       <Page size="A4" style={styles.page} wrap>
         <Text style={styles.heading}>{book.photosHeading}</Text>
-        {book.photos.length === 0 ? (
+        {photos.length === 0 ? (
           <Text style={styles.story}>{book.emptyPhotosLabel}</Text>
         ) : (
           <View style={styles.grid}>
-            {book.photos.map((p, i) => (
+            {photos.map((p, i) => (
               <View key={`ph${i}`} style={styles.cell} wrap={false}>
-                {p.image && <Image style={styles.cellImage} src={p.image} />}
+                <Image style={styles.cellImage} src={p.image} />
                 {p.caption ? <Text style={styles.caption}>{p.caption}</Text> : null}
                 <Text style={styles.date}>{p.dateLabel}</Text>
               </View>
             ))}
           </View>
         )}
-        <Text style={styles.footer}>{book.footer}</Text>
+        <Text style={styles.footer} fixed>{book.footer}</Text>
       </Page>
     </Document>
   )

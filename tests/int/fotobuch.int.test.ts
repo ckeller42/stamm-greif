@@ -158,6 +158,54 @@ describe('POST /api/fotobuch', () => {
     expect(buf.subarray(0, 5).toString('latin1')).toBe('%PDF-')
   })
 
+  // CodeRabbit review (PR #23): the /fotobuch page previously early-returned out of the whole
+  // form when the eligible set was empty, hiding the "PDF erzeugen" button entirely — but an
+  // empty book is a legal endpoint output (renderFotobuchPdf shows the emptyPhotosLabel page
+  // instead of failing). This proves the server side of that contract still holds after the
+  // concurrency-limited transcode change: an event with zero eligible photos still yields a real,
+  // valid PDF, not an error.
+  it('produces a valid (empty-grid) PDF for an event with zero eligible photos', async () => {
+    const cookie = await loginCookie(kuratorEmail)
+    const emptyEvent = await payload.create({
+      collection: 'events',
+      data: { name: `Leeres Lager ${Date.now()}`, datePrecision: 'year', dateValue: '2001' },
+      overrideAccess: true,
+    })
+    const res = await fetch('http://localhost:3000/api/fotobuch', {
+      method: 'POST', headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'event', id: emptyEvent.id }),
+    })
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/pdf')
+    const buf = Buffer.from(await res.arrayBuffer())
+    expect(buf.subarray(0, 5).toString('latin1')).toBe('%PDF-')
+  })
+
+  // CodeRabbit review (PR #23): Content-Disposition now carries both the ASCII-mangled
+  // filename= fallback AND an RFC 5987 filename*=UTF-8'' extended parameter, so a name with
+  // umlauts survives into the real download instead of being reduced to underscores.
+  it('Content-Disposition carries an RFC 5987 filename*=UTF-8\'\' preserving umlauts', async () => {
+    const cookie = await loginCookie(kuratorEmail)
+    const umlautEvent = await payload.create({
+      collection: 'events',
+      data: { name: `Käfer-Lager äöüß ${Date.now()}`, datePrecision: 'year', dateValue: '1989' },
+      overrideAccess: true,
+    })
+    const res = await fetch('http://localhost:3000/api/fotobuch', {
+      method: 'POST', headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'event', id: umlautEvent.id }),
+    })
+    expect(res.status).toBe(200)
+    const disposition = res.headers.get('content-disposition') ?? ''
+    expect(disposition).toContain('filename="')
+    expect(disposition).toMatch(/filename\*=UTF-8''/)
+    const match = /filename\*=UTF-8''([^;]+)/.exec(disposition)
+    expect(match).not.toBeNull()
+    const decoded = decodeURIComponent(match![1])
+    expect(decoded).toContain('Käfer-Lager')
+    expect(decoded).toContain('äöüß')
+  })
+
   it('an admin can also generate a book', async () => {
     const admin = await payload.create({
       collection: 'users',
