@@ -18,7 +18,7 @@ import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/l
 import { facesEnabled } from '@/lib/faces'
 import { modelsPresent } from '@/lib/face-model'
 import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
-import { stripImageMetadata } from '@/lib/strip-image-metadata'
+import { detectImageType, stripImageMetadata } from '@/lib/strip-image-metadata'
 import { enqueueDetectFaces } from '@/jobs/detectFaces'
 
 // Spec P2.2: two same-motif scans/re-exports of one slide produce dHashes that differ only in a
@@ -46,7 +46,12 @@ const DUPLICATE_HAMMING_THRESHOLD = 8
 // Note this project never enables Payload's `useTempFiles` (payload.config.ts's default,
 // `false`, is left as-is), so `req.file.data` is always the full in-memory buffer — no
 // tempFilePath branch needed here.
-const HEIC_FTYP_BRANDS = new Set(['heic', 'heix', 'heif', 'mif1', 'msf1'])
+// Includes the HEVC-based HEIF brands (hevc/hevx/heim/heis/hevm/hevs) alongside the classic HEIC
+// ones — a genuine HEIF whose ftyp brand was outside this set used to slip past conversion AND past
+// the metadata scrub, leaving a decodable image with its GPS stored raw (consent audit C1, F2).
+const HEIC_FTYP_BRANDS = new Set([
+  'heic', 'heix', 'heif', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs', 'mif1', 'msf1',
+])
 
 // Structural check, not a trust of the declared Content-Type: an ISOBMFF `ftyp` box (bytes 4-7
 // literally spell "ftyp") naming a HEIC/HEIF brand (bytes 8-11). This is what actually gates
@@ -154,18 +159,19 @@ const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation
 // carries no EXIF, so this is a no-op on it). Fail CLOSED: if the scrub can't be completed, reject
 // the upload with a 400 rather than persist an original we couldn't clean — a leak is worse than a
 // rejected upload the member can retry.
-// Only the raster types we actually store and know how to scrub. Anything else (a disallowed GIF,
-// or a HEIC that failed the sniff and stayed unconverted) is deliberately skipped here so Payload's
-// own checkFileRestrictions — which runs AFTER this beforeOperation hook — still owns the
-// "Invalid MIME type" rejection for it, rather than this hook pre-empting that with its own error.
-const STRIPPABLE_MIMETYPES = new Set(['image/jpeg', 'image/png', 'image/tiff', 'image/webp'])
-
 const stripMetadataOnUpload: CollectionBeforeOperationHook = async ({ req, operation }) => {
   if (operation !== 'create' && operation !== 'update') return
   const file = req.file
-  if (!file || !STRIPPABLE_MIMETYPES.has(file.mimetype)) return
+  if (!file) return
+  // Sniff the ACTUAL format from the bytes, never the client-declared mimetype (F2: a JPEG-with-GPS
+  // uploaded as image/heic must still be scrubbed, and Payload validates by sniffing too). A type
+  // we don't recognise as a stored raster image is left untouched, so Payload's own
+  // checkFileRestrictions — which runs AFTER this beforeOperation hook — still owns the
+  // "Invalid MIME type" rejection for it rather than this hook pre-empting it with its own error.
+  const type = detectImageType(file.data)
+  if (!type) return
   try {
-    const stripped = await stripImageMetadata(file.data, file.mimetype)
+    const stripped = await stripImageMetadata(file.data, type)
     req.file = { ...file, data: stripped, size: stripped.length }
   } catch (err) {
     req.payload.logger.error({

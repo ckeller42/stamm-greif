@@ -148,10 +148,12 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
   const threshold = similarityThreshold()
 
   let suggestionCount = 0
+  const suggestedPersonIds: Array<number | string> = []
   for (const face of faces) {
     const box = normalizeBox(face.box, width, height)
     if (decidedBoxes.some((b) => boxIoU(b, box) > IOU_DUPLICATE_THRESHOLD)) continue
     const match = bestMatchPerPerson(face.embedding, index, threshold)
+    if (match?.personId != null) suggestedPersonIds.push(match.personId)
     await req.payload.create({
       collection: 'face-suggestions',
       data: {
@@ -179,7 +181,7 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
 
   // C3 (consent audit): close the TOCTOU between this handler's opening guard and the writes above
   // — see purgeSuggestionsIfConsentWithdrawn for the full reasoning.
-  if (await purgeSuggestionsIfConsentWithdrawn(req, photo.id, suggestionCount)) {
+  if (await purgeSuggestionsIfConsentWithdrawn(req, photo.id, suggestionCount, suggestedPersonIds)) {
     return { output: { suggestionCount: 0 } }
   }
 

@@ -63,11 +63,19 @@ async function loginCookie(email: string): Promise<string> {
   return res.headers.get('set-cookie') ?? ''
 }
 
-async function uploadFile(fixtureFile: string, payloadFields: Record<string, unknown>) {
+async function uploadFile(
+  fixtureFile: string,
+  payloadFields: Record<string, unknown>,
+  spoof?: { contentType: string; filename: string },
+) {
   const cookie = await loginCookie(memberEmail)
   const body = new FormData()
   const bytes = await readFile(path.resolve(process.cwd(), 'tests/fixtures', fixtureFile))
-  body.append('file', new Blob([bytes], { type: 'image/jpeg' }), fixtureFile)
+  body.append(
+    'file',
+    new Blob([bytes], { type: spoof?.contentType ?? 'image/jpeg' }),
+    spoof?.filename ?? fixtureFile,
+  )
   body.append('_payload', JSON.stringify({ _status: 'draft', ...payloadFields }))
   const res = await fetch('http://localhost:3000/api/photos', { method: 'POST', headers: { cookie }, body })
   return res
@@ -203,5 +211,28 @@ describe('EXIF-on-upload prefill', () => {
       sharp(storedBytes).raw().toBuffer(),
     ])
     expect(Buffer.compare(origPixels, storedPixels)).toBe(0)
+  })
+
+  // Consent audit C1/F2: the scrub must key off the SNIFFED format, not the client-declared
+  // mimetype. A member could upload real JPEG-with-GPS bytes labelled image/heic (filename .heic);
+  // the HEIC converter no-ops (bytes aren't HEIC) and Payload sniff-accepts them as JPEG. The
+  // stored original must still be scrubbed.
+  it('scrubs a JPEG-with-GPS even when uploaded spoofed as image/heic', async () => {
+    const { default: sharp } = await import('sharp')
+    const res = await uploadFile('dia-exif.jpg', { datePrecision: 'unknown' }, {
+      contentType: 'image/heic',
+      filename: 'spoof.heic',
+    })
+    const json = (await res.json()) as { doc?: PhotoDoc; errors?: { message: string }[] }
+    expect(res.status, JSON.stringify(json.errors)).toBe(201)
+    const id = json.doc?.id as number
+    createdPhotoIds.push(id)
+
+    const kuratorView = await fetchAsKurator(id)
+    const filename = kuratorView.filename as string
+    const storedBytes = await readFile(path.resolve(process.cwd(), 'photos', filename))
+    expect((await sharp(storedBytes).metadata()).exif).toBeUndefined()
+    // Byte-level: no EXIF APP1 identifier anywhere in the stored original.
+    expect(storedBytes.includes(Buffer.from('Exif\0\0', 'latin1'))).toBe(false)
   })
 })
