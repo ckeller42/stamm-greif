@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { TaskConfig, TaskHandler, PayloadRequest } from 'payload'
 import { analyseFaces, modelsPresent } from '@/lib/face-model'
+import { purgeSuggestionsIfConsentWithdrawn } from '@/lib/face-consent-purge'
 import {
   bestMatchPerPerson,
   boxIoU,
@@ -174,6 +175,12 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
       req,
     })
     suggestionCount++
+  }
+
+  // C3 (consent audit): close the TOCTOU between this handler's opening guard and the writes above
+  // — see purgeSuggestionsIfConsentWithdrawn for the full reasoning.
+  if (await purgeSuggestionsIfConsentWithdrawn(req, photo.id, suggestionCount)) {
+    return { output: { suggestionCount: 0 } }
   }
 
   req.payload.logger.info({ msg: 'face-detect', photoId: photo.id, detected: faces.length, suggestionCount })

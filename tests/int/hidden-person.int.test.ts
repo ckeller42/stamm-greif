@@ -168,6 +168,49 @@ describe('photo visibility', () => {
   })
 })
 
+describe('person visibility (consent audit C2)', () => {
+  it('a hidden person is not readable by a mitglied, but is by a kurator', async () => {
+    const hidden = await payload.create({
+      collection: 'people',
+      data: { name: `Geheim ${Date.now()}`, bio: 'Wohnadresse', hidden: true },
+      overrideAccess: true,
+    })
+    // mitglied: collection access filters the hidden person out entirely.
+    expect(
+      await payload.findByID({ collection: 'people', id: hidden.id, overrideAccess: false, user: mitgliedA, disableErrors: true }),
+    ).toBeNull()
+    const memberFind = await payload.find({
+      collection: 'people',
+      where: { id: { equals: hidden.id } },
+      overrideAccess: false,
+      user: mitgliedA,
+      disableErrors: true,
+    })
+    expect(memberFind.totalDocs).toBe(0)
+    // kurator: still fully visible — they manage the hidden state and the /gesichter review.
+    const kView = await payload.findByID({ collection: 'people', id: hidden.id, overrideAccess: false, user: kurator, disableErrors: true })
+    expect(kView?.name).toBeTruthy()
+  })
+
+  it('a visible person remains readable by a mitglied', async () => {
+    const visible = await payload.create({ collection: 'people', data: { name: `Sichtbar ${Date.now()}` }, overrideAccess: true })
+    const memberFind = await payload.find({
+      collection: 'people',
+      where: { id: { equals: visible.id } },
+      overrideAccess: false,
+      user: mitgliedA,
+      disableErrors: true,
+    })
+    expect(memberFind.totalDocs).toBe(1)
+  })
+
+  it('anonymous users cannot read people', async () => {
+    const p = await payload.create({ collection: 'people', data: { name: `AnonTest ${Date.now()}` }, overrideAccess: true })
+    const res = await payload.find({ collection: 'people', where: { id: { equals: p.id } }, overrideAccess: false, disableErrors: true })
+    expect(res.totalDocs).toBe(0)
+  })
+})
+
 describe('photo update access (uploader cannot bypass curator moderation)', () => {
   it('uploader cannot self-publish their own draft', async () => {
     const draft = await createPhotoAs(mitgliedA, { _status: 'draft' })

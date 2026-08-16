@@ -18,6 +18,7 @@ import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/l
 import { facesEnabled } from '@/lib/faces'
 import { modelsPresent } from '@/lib/face-model'
 import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
+import { stripImageMetadata } from '@/lib/strip-image-metadata'
 import { enqueueDetectFaces } from '@/jobs/detectFaces'
 
 // Spec P2.2: two same-motif scans/re-exports of one slide produce dHashes that differ only in a
@@ -142,6 +143,52 @@ const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation
   }
   const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
   req.file = { ...file, data: jpegBuffer, mimetype: 'image/jpeg', name: jpegName, size: jpegBuffer.length }
+}
+
+// P2 consent audit, C1: scrub location/identity metadata (EXIF GPS, XMP, IPTC) from the bytes that
+// will actually be STORED as the original, so the anonymous kiosk download route and Payload's own
+// /api/photos/file/:filename — both of which stream the original blob and neither of which passes
+// through the kurator-only exifLat/exifLng field access — can never hand a photo's coordinates to a
+// member or a guest. Must run AFTER extractExifOnUpload (which has already read the GPS into the DB
+// fields, where curators keep access to it) and AFTER convertHeicToJpeg (HEIC is JPEG by now, and
+// carries no EXIF, so this is a no-op on it). Fail CLOSED: if the scrub can't be completed, reject
+// the upload with a 400 rather than persist an original we couldn't clean — a leak is worse than a
+// rejected upload the member can retry.
+// Only the raster types we actually store and know how to scrub. Anything else (a disallowed GIF,
+// or a HEIC that failed the sniff and stayed unconverted) is deliberately skipped here so Payload's
+// own checkFileRestrictions — which runs AFTER this beforeOperation hook — still owns the
+// "Invalid MIME type" rejection for it, rather than this hook pre-empting that with its own error.
+const STRIPPABLE_MIMETYPES = new Set(['image/jpeg', 'image/png', 'image/tiff', 'image/webp'])
+
+const stripMetadataOnUpload: CollectionBeforeOperationHook = async ({ req, operation }) => {
+  if (operation !== 'create' && operation !== 'update') return
+  const file = req.file
+  if (!file || !STRIPPABLE_MIMETYPES.has(file.mimetype)) return
+  try {
+    const stripped = await stripImageMetadata(file.data, file.mimetype)
+    req.file = { ...file, data: stripped, size: stripped.length }
+  } catch (err) {
+    req.payload.logger.error({
+      msg: 'metadata-strip-failed',
+      name: file.name,
+      mimetype: file.mimetype,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw new ValidationError(
+      {
+        collection: 'photos',
+        errors: [
+          {
+            path: 'file',
+            message:
+              'Die Bilddatei konnte nicht verarbeitet werden — bitte als JPEG exportieren und erneut hochladen.',
+          },
+        ],
+        req,
+      },
+      req.t,
+    )
+  }
 }
 
 // Computes the dHash (spec P2.2) of the file bytes that will actually be STORED — must run AFTER
@@ -475,7 +522,11 @@ export const Photos: CollectionConfig = {
     // read from the original bytes.
     // computePhashOnUpload must run AFTER convertHeicToJpeg (see its own comment above) — the
     // opposite ordering constraint from extractExifOnUpload, which must run BEFORE it.
-    beforeOperation: [extractExifOnUpload, convertHeicToJpeg, computePhashOnUpload],
+    // stripMetadataOnUpload (C1) sits between them: after extractExifOnUpload has read GPS into the
+    // DB fields and after convertHeicToJpeg, but before computePhashOnUpload so the phash describes
+    // the scrubbed bytes that are actually stored (the strip is lossless for JPEG, so the hash is
+    // identical either way — the ordering is for correctness of intent, not a behavioural need).
+    beforeOperation: [extractExifOnUpload, convertHeicToJpeg, stripMetadataOnUpload, computePhashOnUpload],
     beforeDelete: [captureDuplicateReferencesBeforeDelete, deleteFaceSuggestionsBeforePhotoDelete],
     afterDelete: [clearDuplicateFlagsAfterDelete],
     // P2.3: face detection runs on the draft→published transition, never on a draft. Member
