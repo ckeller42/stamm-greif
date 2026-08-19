@@ -1,5 +1,5 @@
 import type { CollectionConfig } from 'payload'
-import { authenticated, isAdmin, isKuratorOrAdmin } from '@/access/roles'
+import { canReadPerson, isAdmin, isKuratorOrAdmin } from '@/access/roles'
 import {
   syncHiddenPhotos,
   captureHiddenPhotosBeforePersonDelete,
@@ -11,7 +11,7 @@ export const People: CollectionConfig = {
   slug: 'people',
   labels: { singular: 'Person', plural: 'Personen' },
   admin: { useAsTitle: 'name', group: 'Archiv' },
-  access: { read: authenticated, create: isKuratorOrAdmin, update: isKuratorOrAdmin, delete: isAdmin },
+  access: { read: canReadPerson, create: isKuratorOrAdmin, update: isKuratorOrAdmin, delete: isAdmin },
   // Review (Task 6, round 2), C2: `payload.update({ collection: 'people', where, data })` — the
   // admin list view's own bulk-edit action, and the equivalent `PATCH /api/people?where=...` REST
   // call — runs `updateOperation` (collections/operations/update.js), which is a SEPARATE code

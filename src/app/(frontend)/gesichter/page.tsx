@@ -59,12 +59,15 @@ export default async function GesichterPage() {
 
   // Suggestions whose photo is in the Papierkorb are not reviewable: the bin is reversible, so
   // the rows stay put and simply drop out of the queue until the photo is restored or purged.
-  const open = suggestions.docs.filter(
-    (s) => typeof s.photo === 'object' && s.photo !== null && !s.photo.deletedAt,
-  )
-  const confirmedRows = confirmed.docs.filter(
-    (s) => typeof s.photo === 'object' && s.photo !== null && !s.photo.deletedAt,
-  )
+  // C3 (consent audit): also drop any suggestion whose photo now has a hidden person. The purge
+  // hook and detectFaces' post-write re-check normally delete those rows, but this is the last belt
+  // — a row that slipped through a race must still never surface a hidden person's face for review.
+  const reviewable = (s: { photo: unknown }) => {
+    const photo = s.photo
+    return typeof photo === 'object' && photo !== null && !(photo as { deletedAt?: unknown }).deletedAt && !(photo as { hasHiddenPerson?: unknown }).hasHiddenPerson
+  }
+  const open = suggestions.docs.filter(reviewable)
+  const confirmedRows = confirmed.docs.filter(reviewable)
 
   // Crop by CSS from the existing thumbnail — no face crops are ever written to disk. The 96px
   // viewport shows the box; the image is scaled so the box fills it and shifted so the box's

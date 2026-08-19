@@ -63,11 +63,19 @@ async function loginCookie(email: string): Promise<string> {
   return res.headers.get('set-cookie') ?? ''
 }
 
-async function uploadFile(fixtureFile: string, payloadFields: Record<string, unknown>) {
+async function uploadFile(
+  fixtureFile: string,
+  payloadFields: Record<string, unknown>,
+  spoof?: { contentType: string; filename: string },
+) {
   const cookie = await loginCookie(memberEmail)
   const body = new FormData()
   const bytes = await readFile(path.resolve(process.cwd(), 'tests/fixtures', fixtureFile))
-  body.append('file', new Blob([bytes], { type: 'image/jpeg' }), fixtureFile)
+  body.append(
+    'file',
+    new Blob([bytes], { type: spoof?.contentType ?? 'image/jpeg' }),
+    spoof?.filename ?? fixtureFile,
+  )
   body.append('_payload', JSON.stringify({ _status: 'draft', ...payloadFields }))
   const res = await fetch('http://localhost:3000/api/photos', { method: 'POST', headers: { cookie }, body })
   return res
@@ -89,6 +97,7 @@ async function fetchAsKurator(id: number): Promise<PhotoDoc> {
 
 interface PhotoDoc {
   id: number
+  filename?: string | null
   datePrecision?: string
   dateValue?: string | null
   exifTakenAt?: string | null
@@ -167,5 +176,63 @@ describe('EXIF-on-upload prefill', () => {
     expect(kuratorView.exifLat).toBeFalsy()
     expect(kuratorView.exifLng).toBeFalsy()
     expect(kuratorView.exifTakenAt).toBeFalsy()
+  })
+
+  // Consent audit C1: the GPS coordinate must be read into the (kurator-only) exifLat/exifLng DB
+  // fields AND scrubbed from the STORED original file. The original blob is what the anonymous
+  // kiosk download route and Payload's /api/photos/file/:filename stream — neither passes through
+  // field access — so a coordinate left in the file bytes leaks a member's/child's home location.
+  it('scrubs GPS EXIF from the stored original while keeping the coordinate in the kurator-only fields', async () => {
+    const { default: sharp } = await import('sharp')
+    // Sanity-check the fixture itself really carries GPS EXIF before upload.
+    const fixtureBytes = await readFile(path.resolve(process.cwd(), 'tests/fixtures', 'dia-exif.jpg'))
+    expect((await sharp(fixtureBytes).metadata()).exif).toBeTruthy()
+
+    const res = await uploadFixture({ datePrecision: 'unknown' })
+    const json = (await res.json()) as { doc?: PhotoDoc; errors?: { message: string }[] }
+    expect(res.status, JSON.stringify(json.errors)).toBe(201)
+    const id = json.doc?.id as number
+    createdPhotoIds.push(id)
+
+    // The coordinate is preserved for curators via the DB fields...
+    const kuratorView = await fetchAsKurator(id)
+    expect(kuratorView.exifLat).toBeCloseTo(EXPECTED_LAT, 4)
+    expect(kuratorView.exifLng).toBeCloseTo(EXPECTED_LNG, 4)
+
+    // ...but the stored original file on disk has NO EXIF left at all.
+    const filename = kuratorView.filename as string
+    expect(filename).toBeTruthy()
+    const storedBytes = await readFile(path.resolve(process.cwd(), 'photos', filename))
+    const storedMeta = await sharp(storedBytes).metadata()
+    expect(storedMeta.exif).toBeUndefined()
+    // And the scrub was lossless — same decoded pixels as the fixture (no re-encode).
+    const [origPixels, storedPixels] = await Promise.all([
+      sharp(fixtureBytes).raw().toBuffer(),
+      sharp(storedBytes).raw().toBuffer(),
+    ])
+    expect(Buffer.compare(origPixels, storedPixels)).toBe(0)
+  })
+
+  // Consent audit C1/F2: the scrub must key off the SNIFFED format, not the client-declared
+  // mimetype. A member could upload real JPEG-with-GPS bytes labelled image/heic (filename .heic);
+  // the HEIC converter no-ops (bytes aren't HEIC) and Payload sniff-accepts them as JPEG. The
+  // stored original must still be scrubbed.
+  it('scrubs a JPEG-with-GPS even when uploaded spoofed as image/heic', async () => {
+    const { default: sharp } = await import('sharp')
+    const res = await uploadFile('dia-exif.jpg', { datePrecision: 'unknown' }, {
+      contentType: 'image/heic',
+      filename: 'spoof.heic',
+    })
+    const json = (await res.json()) as { doc?: PhotoDoc; errors?: { message: string }[] }
+    expect(res.status, JSON.stringify(json.errors)).toBe(201)
+    const id = json.doc?.id as number
+    createdPhotoIds.push(id)
+
+    const kuratorView = await fetchAsKurator(id)
+    const filename = kuratorView.filename as string
+    const storedBytes = await readFile(path.resolve(process.cwd(), 'photos', filename))
+    expect((await sharp(storedBytes).metadata()).exif).toBeUndefined()
+    // Byte-level: no EXIF APP1 identifier anywhere in the stored original.
+    expect(storedBytes.includes(Buffer.from('Exif\0\0', 'latin1'))).toBe(false)
   })
 })

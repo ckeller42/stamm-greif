@@ -6,6 +6,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import type { TaskConfig, TaskHandler, PayloadRequest } from 'payload'
 import { analyseFaces, modelsPresent } from '@/lib/face-model'
+import { purgeSuggestionsIfConsentWithdrawn } from '@/lib/face-consent-purge'
 import {
   bestMatchPerPerson,
   boxIoU,
@@ -147,10 +148,12 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
   const threshold = similarityThreshold()
 
   let suggestionCount = 0
+  const suggestedPersonIds: Array<number | string> = []
   for (const face of faces) {
     const box = normalizeBox(face.box, width, height)
     if (decidedBoxes.some((b) => boxIoU(b, box) > IOU_DUPLICATE_THRESHOLD)) continue
     const match = bestMatchPerPerson(face.embedding, index, threshold)
+    if (match?.personId != null) suggestedPersonIds.push(match.personId)
     await req.payload.create({
       collection: 'face-suggestions',
       data: {
@@ -176,8 +179,17 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
     suggestionCount++
   }
 
-  req.payload.logger.info({ msg: 'face-detect', photoId: photo.id, detected: faces.length, suggestionCount })
-  return { output: { suggestionCount } }
+  // C3 (consent audit): close the TOCTOU between this handler's opening guard and the writes above
+  // — see purgeSuggestionsIfConsentWithdrawn for the full reasoning. Report a suggestionCount that
+  // reflects any rows the re-check just deleted, never the pre-purge total.
+  const purge = await purgeSuggestionsIfConsentWithdrawn(req, photo.id, suggestionCount, suggestedPersonIds)
+  if (purge.allWithdrawn) {
+    return { output: { suggestionCount: 0 } }
+  }
+  const finalCount = suggestionCount - purge.purgedSuggested
+
+  req.payload.logger.info({ msg: 'face-detect', photoId: photo.id, detected: faces.length, suggestionCount: finalCount })
+  return { output: { suggestionCount: finalCount } }
 }
 
 export const detectFacesTask: TaskConfig<DetectFacesIO> = {

@@ -18,6 +18,7 @@ import { computeExifFill, resolveIncomingDateFields, type ParsedExif } from '@/l
 import { facesEnabled } from '@/lib/faces'
 import { modelsPresent } from '@/lib/face-model'
 import { computeDHash, DEGENERATE_HASHES, hammingDistance, isDegenerateHash } from '@/lib/phash'
+import { detectImageType, stripImageMetadata } from '@/lib/strip-image-metadata'
 import { enqueueDetectFaces } from '@/jobs/detectFaces'
 
 // Spec P2.2: two same-motif scans/re-exports of one slide produce dHashes that differ only in a
@@ -45,7 +46,12 @@ const DUPLICATE_HAMMING_THRESHOLD = 8
 // Note this project never enables Payload's `useTempFiles` (payload.config.ts's default,
 // `false`, is left as-is), so `req.file.data` is always the full in-memory buffer — no
 // tempFilePath branch needed here.
-const HEIC_FTYP_BRANDS = new Set(['heic', 'heix', 'heif', 'mif1', 'msf1'])
+// Includes the HEVC-based HEIF brands (hevc/hevx/heim/heis/hevm/hevs) alongside the classic HEIC
+// ones — a genuine HEIF whose ftyp brand was outside this set used to slip past conversion AND past
+// the metadata scrub, leaving a decodable image with its GPS stored raw (consent audit C1, F2).
+const HEIC_FTYP_BRANDS = new Set([
+  'heic', 'heix', 'heif', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs', 'mif1', 'msf1',
+])
 
 // Structural check, not a trust of the declared Content-Type: an ISOBMFF `ftyp` box (bytes 4-7
 // literally spell "ftyp") naming a HEIC/HEIF brand (bytes 8-11). This is what actually gates
@@ -142,6 +148,60 @@ const convertHeicToJpeg: CollectionBeforeOperationHook = async ({ req, operation
   }
   const jpegName = file.name.replace(/\.[^./]+$/, '') + '.jpg'
   req.file = { ...file, data: jpegBuffer, mimetype: 'image/jpeg', name: jpegName, size: jpegBuffer.length }
+}
+
+// P2 consent audit, C1: scrub location/identity metadata (EXIF GPS, XMP, IPTC) from the bytes that
+// will actually be STORED as the original, so the anonymous kiosk download route and Payload's own
+// /api/photos/file/:filename — both of which stream the original blob and neither of which passes
+// through the kurator-only exifLat/exifLng field access — can never hand a photo's coordinates to a
+// member or a guest. Must run AFTER extractExifOnUpload (which has already read the GPS into the DB
+// fields, where curators keep access to it) and AFTER convertHeicToJpeg (HEIC is JPEG by now, and
+// carries no EXIF, so this is a no-op on it). Fail CLOSED: if the scrub can't be completed, reject
+// the upload with a 400 rather than persist an original we couldn't clean — a leak is worse than a
+// rejected upload the member can retry.
+const stripMetadataOnUpload: CollectionBeforeOperationHook = async ({ req, operation }) => {
+  if (operation !== 'create' && operation !== 'update') return
+  const file = req.file
+  if (!file) return
+  // Sniff the ACTUAL format from the bytes, never the client-declared mimetype (F2: a JPEG-with-GPS
+  // uploaded as image/heic must still be scrubbed, and Payload validates by sniffing too). A type
+  // we don't recognise as a stored raster image is left untouched, so Payload's own
+  // checkFileRestrictions — which runs AFTER this beforeOperation hook — still owns the
+  // "Invalid MIME type" rejection for it rather than this hook pre-empting it with its own error.
+  const type = detectImageType(file.data)
+  if (!type) return
+  try {
+    const stripped = await stripImageMetadata(file.data, type)
+    // The `heic` branch re-encodes to JPEG, so the stored bytes are no longer HEIC — relabel the
+    // file (mimetype + extension) to match, or the original would be served with a wrong content
+    // type. Every other type keeps its container, so the label is already correct.
+    const relabel =
+      type === 'heic'
+        ? { mimetype: 'image/jpeg', name: file.name.replace(/\.[^./]+$/, '') + '.jpg' }
+        : {}
+    req.file = { ...file, data: stripped, size: stripped.length, ...relabel }
+  } catch (err) {
+    req.payload.logger.error({
+      msg: 'metadata-strip-failed',
+      name: file.name,
+      mimetype: file.mimetype,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    throw new ValidationError(
+      {
+        collection: 'photos',
+        errors: [
+          {
+            path: 'file',
+            message:
+              'Die Bilddatei konnte nicht verarbeitet werden — bitte als JPEG exportieren und erneut hochladen.',
+          },
+        ],
+        req,
+      },
+      req.t,
+    )
+  }
 }
 
 // Computes the dHash (spec P2.2) of the file bytes that will actually be STORED — must run AFTER
@@ -475,7 +535,11 @@ export const Photos: CollectionConfig = {
     // read from the original bytes.
     // computePhashOnUpload must run AFTER convertHeicToJpeg (see its own comment above) — the
     // opposite ordering constraint from extractExifOnUpload, which must run BEFORE it.
-    beforeOperation: [extractExifOnUpload, convertHeicToJpeg, computePhashOnUpload],
+    // stripMetadataOnUpload (C1) sits between them: after extractExifOnUpload has read GPS into the
+    // DB fields and after convertHeicToJpeg, but before computePhashOnUpload so the phash describes
+    // the scrubbed bytes that are actually stored (the strip is lossless for JPEG, so the hash is
+    // identical either way — the ordering is for correctness of intent, not a behavioural need).
+    beforeOperation: [extractExifOnUpload, convertHeicToJpeg, stripMetadataOnUpload, computePhashOnUpload],
     beforeDelete: [captureDuplicateReferencesBeforeDelete, deleteFaceSuggestionsBeforePhotoDelete],
     afterDelete: [clearDuplicateFlagsAfterDelete],
     // P2.3: face detection runs on the draft→published transition, never on a draft. Member
