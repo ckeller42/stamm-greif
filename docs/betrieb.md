@@ -255,12 +255,14 @@ heikel bei Kindern und Jugendlichen. Damit diese Koordinaten das Archiv nicht ve
 - Beim Hochladen liest der Server Aufnahmedatum und -ort **einmalig** aus dem EXIF aus und legt sie
   in eigene Felder (`exifTakenAt`, `exifLat`, `exifLng`). Aufnahmeort (`exifLat`/`exifLng`) ist
   **nur für Kuratoren/Admins** lesbar, nicht für Mitglieder.
-- Direkt danach werden **alle EXIF-/Metadaten aus der gespeicherten Originaldatei entfernt**: JPEG
-  verlustfrei ohne Neukodierung der Pixel (inkl. Verwerfen angehängter Zweitbilder wie iPhone-MPF/
-  Bewegungsfotos, die eigene GPS-Daten tragen); PNG/TIFF/WebP verlustfrei über sharp neu kodiert;
-  ein selten unkonvertiert durchgereichtes HEIC/HEIF wird als JPEG (q95) neu kodiert. Die auf der
-  Platte liegende Datei — und damit auch das, was die anonyme Kiosk-Download-Route und Payloads
-  eigene Datei-Route (`/api/photos/file/…`) ausliefern — enthält danach **keine Koordinaten mehr**.
+- Direkt danach werden **die orts-/personenbezogenen Metadaten aus der gespeicherten
+  Originaldatei entfernt** — EXIF (inkl. GPS), XMP und IPTC: JPEG verlustfrei ohne Neukodierung der
+  Pixel (inkl. Verwerfen angehängter Zweitbilder wie iPhone-MPF/Bewegungsfotos, die eigene
+  GPS-Daten tragen); PNG/TIFF/WebP verlustfrei über sharp neu kodiert; ein selten unkonvertiert
+  durchgereichtes HEIC/HEIF wird als JPEG (q95) neu kodiert. Das **ICC-Farbprofil bleibt bewusst
+  erhalten** (Farbtreue; enthält keine Orts- oder Personendaten). Die auf der Platte liegende Datei
+  — und damit auch das, was die anonyme Kiosk-Download-Route und Payloads eigene Datei-Route
+  (`/api/photos/file/…`) ausliefern — enthält danach **keine Koordinaten mehr**.
 - Lässt sich eine Datei nicht sicher säubern, wird der Upload **abgelehnt** (kein „ungesäubertes
   Original trotzdem speichern"). Die betroffene Person exportiert dann z. B. als JPEG neu.
 

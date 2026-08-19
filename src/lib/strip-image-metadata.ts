@@ -175,8 +175,8 @@ export async function stripImageMetadata(buf: Buffer, type: SniffedImageType): P
     } catch {
       // A structurally odd JPEG we can't safely walk: fall back to a guaranteed strip via
       // re-encode rather than store an unscrubbed original (fail closed). q95 keeps this rare
-      // path visually near-lossless.
-      return sharp(buf).rotate().jpeg({ quality: 95 }).toBuffer()
+      // path visually near-lossless; keepIccProfile retains colour (matching the other paths).
+      return sharp(buf).rotate().keepIccProfile().jpeg({ quality: 95 }).toBuffer()
     }
   }
   // keepIccProfile retains ONLY the colour profile across the re-encode (not EXIF/GPS), so colours

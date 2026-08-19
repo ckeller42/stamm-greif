@@ -36,6 +36,20 @@ function containsExifMarker(buf: Buffer): boolean {
   return buf.includes(Buffer.from('Exif\0\0', 'latin1'))
 }
 
+// Read the TIFF Compression tag (259) from IFD0. Returns its SHORT value, or null if absent.
+function tiffCompressionTag(buf: Buffer): number | null {
+  const le = buf.toString('latin1', 0, 2) === 'II'
+  const u16 = (o: number) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o))
+  const u32 = (o: number) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o))
+  const ifd = u32(4)
+  const entries = u16(ifd)
+  for (let i = 0; i < entries; i++) {
+    const e = ifd + 2 + i * 12
+    if (u16(e) === 259) return u16(e + 8) // SHORT value sits in the first 2 bytes of the value field
+  }
+  return null
+}
+
 describe('detectImageType (magic-byte sniff, ignores label)', () => {
   it('sniffs real formats from bytes', async () => {
     expect(detectImageType(await jpegWithGps())).toBe('jpeg')
@@ -150,16 +164,24 @@ describe('stripImageMetadata (format-aware, sniffed type)', () => {
   })
 
   it('strips a TIFF losslessly (lzw, not the lossy default JPEG-in-TIFF)', async () => {
-    const tiff = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 30, g: 60, b: 90 } } })
+    // A NON-uniform source encoded losslessly (lzw): only then does a pixel compare actually detect
+    // a lossy re-encode. sharp().metadata() does not expose TIFF compression, so we parse tag 259.
+    const w = 16, h = 16
+    const raw = Buffer.alloc(w * h * 3)
+    for (let i = 0; i < raw.length; i++) raw[i] = (i * 37) % 256
+    const tiff = await sharp(raw, { raw: { width: w, height: h, channels: 3 } })
       .withExif({ IFD0: { ImageDescription: 'somewhere' } })
-      .tiff()
+      .tiff({ compression: 'lzw' })
       .toBuffer()
+
     const out = await stripImageMetadata(tiff, 'tiff')
     const meta = await sharp(out).metadata()
     expect(meta.format).toBe('tiff')
     expect(meta.exif).toBeUndefined()
-    // Lossless: decoded pixels identical to the source.
+    // Lossless: decoded pixels bit-identical to the (lossless, non-uniform) source.
     expect(Buffer.compare(await rawPixels(tiff), await rawPixels(out))).toBe(0)
+    // And the container really is LZW-compressed, not the lossy JPEG-in-TIFF default.
+    expect(tiffCompressionTag(out)).toBe(5) // 5 = LZW (TIFF Compression tag 259)
   })
 
   it('falls back to a re-encode strip for a structurally-broken JPEG rather than storing it unscrubbed', async () => {
