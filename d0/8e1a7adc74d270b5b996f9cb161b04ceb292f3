@@ -1,0 +1,24 @@
+src/lib/strip-image-metadata.ts
+  s_66eef1a01fc814::t_fced057d47005c 178-179
+tests/unit/strip-image-metadata.test.ts
+  s_66eef1a01fc814::t_489abc6ba29331 167-172,174,176,181,183-184
+  s_66eef1a01fc814::t_f2a3f08d6a6622 39-52
+docs/betrieb.md
+  s_66eef1a01fc814::t_8bfb3a5c7cd4e4 258-265
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d08e1a7adc74d270b5b996f9cb161b04ceb292f3",
+  "prompts": {},
+  "sessions": {
+    "s_66eef1a01fc814": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc9b0fdf-4323-4e3e-a9d8-720992d4cff6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Christoph Keller <christoph.keller@gmx.net>"
+    }
+  }
+}
