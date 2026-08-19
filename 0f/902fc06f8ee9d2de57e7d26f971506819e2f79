@@ -1,0 +1,36 @@
+src/jobs/detectFaces.ts
+  s_66eef1a01fc814::t_ae9d98e85e671b 183-186,189,191-192
+docs/betrieb.md
+  s_66eef1a01fc814::t_640fc47125fd11 258-261
+tests/unit/face-consent-purge.test.ts
+  s_66eef1a01fc814::t_de4c2fe01ebc2d 8-13
+  s_66eef1a01fc814::t_6a682e92638834 25,32,38,48,54,60,67
+  s_66eef1a01fc814::t_47265557fc59fb 80
+  s_66eef1a01fc814::t_ffce97584793ee 82-83
+src/collections/Photos.ts
+  s_66eef1a01fc814::t_7fb1efad1e191e 175-182
+tests/unit/strip-image-metadata.test.ts
+  s_66eef1a01fc814::t_c6a2657007ac42 152-164
+src/lib/face-consent-purge.ts
+  s_66eef1a01fc814::t_4a9d1ae61205e6 23-27,29-30,36-37,55-56,65,72,74
+  s_66eef1a01fc814::t_55830be58e4993 86
+  s_66eef1a01fc814::t_2c0de743b4e7e6 103
+src/lib/strip-image-metadata.ts
+  s_66eef1a01fc814::t_d5bf5b0a44e70d 182-185,190,194-195
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0f902fc06f8ee9d2de57e7d26f971506819e2f79",
+  "prompts": {},
+  "sessions": {
+    "s_66eef1a01fc814": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc9b0fdf-4323-4e3e-a9d8-720992d4cff6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Christoph Keller <christoph.keller@gmx.net>"
+    }
+  }
+}
