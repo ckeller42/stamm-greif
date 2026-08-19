@@ -149,6 +149,19 @@ describe('stripImageMetadata (format-aware, sniffed type)', () => {
     expect(meta.exif).toBeUndefined()
   })
 
+  it('strips a TIFF losslessly (lzw, not the lossy default JPEG-in-TIFF)', async () => {
+    const tiff = await sharp({ create: { width: 10, height: 10, channels: 3, background: { r: 30, g: 60, b: 90 } } })
+      .withExif({ IFD0: { ImageDescription: 'somewhere' } })
+      .tiff()
+      .toBuffer()
+    const out = await stripImageMetadata(tiff, 'tiff')
+    const meta = await sharp(out).metadata()
+    expect(meta.format).toBe('tiff')
+    expect(meta.exif).toBeUndefined()
+    // Lossless: decoded pixels identical to the source.
+    expect(Buffer.compare(await rawPixels(tiff), await rawPixels(out))).toBe(0)
+  })
+
   it('falls back to a re-encode strip for a structurally-broken JPEG rather than storing it unscrubbed', async () => {
     const broken = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe1, 0x00, 0x10]), Buffer.from('Exif junk')])
     await expect(stripImageMetadata(broken, 'jpeg')).rejects.toThrow() // sharp cannot decode pure garbage

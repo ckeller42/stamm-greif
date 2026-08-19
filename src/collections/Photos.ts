@@ -172,7 +172,14 @@ const stripMetadataOnUpload: CollectionBeforeOperationHook = async ({ req, opera
   if (!type) return
   try {
     const stripped = await stripImageMetadata(file.data, type)
-    req.file = { ...file, data: stripped, size: stripped.length }
+    // The `heic` branch re-encodes to JPEG, so the stored bytes are no longer HEIC — relabel the
+    // file (mimetype + extension) to match, or the original would be served with a wrong content
+    // type. Every other type keeps its container, so the label is already correct.
+    const relabel =
+      type === 'heic'
+        ? { mimetype: 'image/jpeg', name: file.name.replace(/\.[^./]+$/, '') + '.jpg' }
+        : {}
+    req.file = { ...file, data: stripped, size: stripped.length, ...relabel }
   } catch (err) {
     req.payload.logger.error({
       msg: 'metadata-strip-failed',

@@ -180,13 +180,16 @@ export const detectFacesHandler: TaskHandler<DetectFacesIO> = async ({ input, re
   }
 
   // C3 (consent audit): close the TOCTOU between this handler's opening guard and the writes above
-  // — see purgeSuggestionsIfConsentWithdrawn for the full reasoning.
-  if (await purgeSuggestionsIfConsentWithdrawn(req, photo.id, suggestionCount, suggestedPersonIds)) {
+  // — see purgeSuggestionsIfConsentWithdrawn for the full reasoning. Report a suggestionCount that
+  // reflects any rows the re-check just deleted, never the pre-purge total.
+  const purge = await purgeSuggestionsIfConsentWithdrawn(req, photo.id, suggestionCount, suggestedPersonIds)
+  if (purge.allWithdrawn) {
     return { output: { suggestionCount: 0 } }
   }
+  const finalCount = suggestionCount - purge.purgedSuggested
 
-  req.payload.logger.info({ msg: 'face-detect', photoId: photo.id, detected: faces.length, suggestionCount })
-  return { output: { suggestionCount } }
+  req.payload.logger.info({ msg: 'face-detect', photoId: photo.id, detected: faces.length, suggestionCount: finalCount })
+  return { output: { suggestionCount: finalCount } }
 }
 
 export const detectFacesTask: TaskConfig<DetectFacesIO> = {

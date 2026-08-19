@@ -20,16 +20,21 @@ export type PhotoConsentState = {
  * delete this photo's `offen` rows — exactly the rows just written (pre-existing ones were cleared
  * at the top of the handler, and the exclusive per-photo concurrencyKey means no other detectFaces
  * run for this photo is interleaving). Either the hide's purge hook sees our rows or this re-check
- * does; no embedding survives on a hidden or binned photo. Returns true if it purged, so the caller
- * reports a suggestionCount of 0.
+ * does; no embedding survives on a hidden or binned photo.
+ *
+ * Returns how many of the just-written rows no longer exist, so the caller can report an accurate
+ * suggestionCount: `allWithdrawn` true means the whole photo was withdrawn (every written row was
+ * deleted); otherwise `purgedSuggested` is the count removed for a now-hidden matched person.
  */
+export type ConsentPurgeResult = { allWithdrawn: boolean; purgedSuggested: number }
+
 export async function purgeSuggestionsIfConsentWithdrawn(
   req: PayloadRequest,
   photoId: string | number,
   writtenCount: number,
   suggestedPersonIds: Array<number | string> = [],
-): Promise<boolean> {
-  if (writtenCount <= 0) return false
+): Promise<ConsentPurgeResult> {
+  if (writtenCount <= 0) return { allWithdrawn: false, purgedSuggested: 0 }
   const after = (await req.payload.findByID({
     collection: 'photos',
     id: photoId,
@@ -47,8 +52,8 @@ export async function purgeSuggestionsIfConsentWithdrawn(
     // handles it; this closes the concurrent-overlap gap so a biometric embedding never outlives
     // consent. Scoped to the ids actually suggested THIS run so it costs nothing when no embedding
     // matched a person (the common case) — never a full-table scan on the detection hot path.
-    await purgeOpenSuggestionsNamingHiddenPeople(req, photoId, suggestedPersonIds)
-    return false
+    const purgedSuggested = await purgeOpenSuggestionsNamingHiddenPeople(req, photoId, suggestedPersonIds)
+    return { allWithdrawn: false, purgedSuggested }
   }
   await req.payload.delete({
     collection: 'face-suggestions',
@@ -57,16 +62,16 @@ export async function purgeSuggestionsIfConsentWithdrawn(
     req,
   })
   req.payload.logger.info({ msg: 'face-detect-consent-race-purged', photoId, purged: writtenCount })
-  return true
+  return { allWithdrawn: true, purgedSuggested: writtenCount }
 }
 
 async function purgeOpenSuggestionsNamingHiddenPeople(
   req: PayloadRequest,
   photoId: string | number,
   suggestedPersonIds: Array<number | string>,
-): Promise<void> {
+): Promise<number> {
   const unique = [...new Set(suggestedPersonIds)]
-  if (unique.length === 0) return
+  if (unique.length === 0) return 0
   // Only the just-suggested people that turned hidden — a small, id-scoped query, not a scan.
   const hidden = await req.payload.find({
     collection: 'people',
@@ -78,7 +83,7 @@ async function purgeOpenSuggestionsNamingHiddenPeople(
     req,
   })
   const hiddenIds = hidden.docs.map((p: { id: number | string }) => p.id)
-  if (hiddenIds.length === 0) return
+  if (hiddenIds.length === 0) return 0
   const purged = await req.payload.delete({
     collection: 'face-suggestions',
     where: {
@@ -95,4 +100,5 @@ async function purgeOpenSuggestionsNamingHiddenPeople(
   if (count > 0) {
     req.payload.logger.info({ msg: 'face-detect-consent-race-purged-suggested', photoId, purged: count })
   }
+  return count
 }

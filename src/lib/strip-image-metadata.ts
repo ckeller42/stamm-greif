@@ -179,15 +179,20 @@ export async function stripImageMetadata(buf: Buffer, type: SniffedImageType): P
       return sharp(buf).rotate().jpeg({ quality: 95 }).toBuffer()
     }
   }
-  const img = sharp(buf).rotate()
+  // keepIccProfile retains ONLY the colour profile across the re-encode (not EXIF/GPS), so colours
+  // survive while location metadata is still dropped — mirroring the JPEG path, which keeps its ICC
+  // APP2 segment. TIFF's compression is pinned to lzw because sharp's default is lossy JPEG-in-TIFF.
+  const img = sharp(buf).rotate().keepIccProfile()
   switch (type) {
     case 'png':
       return img.png().toBuffer()
     case 'tiff':
-      return img.tiff().toBuffer()
+      return img.tiff({ compression: 'lzw' }).toBuffer()
     case 'webp':
       return img.webp({ lossless: true }).toBuffer()
     case 'heic':
+      // A HEIC/HEIF (or AVIF) that reached here un-converted — re-encode to JPEG (lossy q95); the
+      // caller relabels the stored file as image/jpeg to match these bytes.
       return img.jpeg({ quality: 95 }).toBuffer()
   }
 }
