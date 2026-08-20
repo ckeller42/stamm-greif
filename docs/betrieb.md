@@ -387,9 +387,16 @@ verborgen (keine verborgene Person markiert) und nicht im Papierkorb ist — die
 eine zusätzliche Einschränkung, niemals ein Umgehen der übrigen Regeln. **Kuratoren dürfen Fotos
 von Minderjährigen oder mitglieder-interne Fotos NICHT für den Kiosk freigeben** — der öffentliche
 Beamer ist die Grenze dessen, was ohne Anmeldung sichtbar werden darf. Wird eine Einwilligung
-widerrufen (Person unter „Personen“ auf „verbergen“ gesetzt), verschwindet das Foto sofort aus
-Slideshow und QR-Downloads — auch aus bereits angezeigten/gescannten QR-Codes, die dann ins Leere
-laufen.
+widerrufen (Person unter „Personen“ auf „verbergen“ gesetzt), verschwindet das Foto aus
+Slideshow und QR-Downloads — der Konsens wird bei **jeder** Anfrage neu geprüft, greift also
+spätestens beim nächsten Bildwechsel bzw. QR-Abruf (ein gerade angezeigtes Standbild bleibt bis
+zum nächsten Wechsel stehen); auch bereits gescannte QR-Codes laufen danach ins Leere.
+
+**Bildunterschriften sind öffentlicher Freitext:** Die Beschreibung eines freigegebenen Fotos wird
+auf dem Beamer mitangezeigt. Sie ist von Hand getippter Text — die Konsens-Regel oben greift nur
+für **markierte** Personen, nicht für Namen, die jemand frei in die Beschreibung schreibt. Nenne in
+Bildunterschriften freigegebener Fotos daher keine Personen, die nicht einwilligen; im Zweifel die
+Beschreibung vor der Freigabe kürzen. (Derselbe Hinweis steht am Feld „Für Kiosk freigegeben“.)
 
 **Link widerrufen:** In `/kiosk-admin` beim jeweiligen Link „Widerrufen“ klicken — der Link ist
 sofort tot, ohne Neustart der App und ohne jede Auswirkung auf Mitglieder-Logins. Links laufen

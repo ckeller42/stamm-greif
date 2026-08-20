@@ -142,6 +142,22 @@ describe('POST /api/fotobuch', () => {
     expect(res.status).toBe(400)
   })
 
+  // C6 (consent audit): a fractional/zero/negative id must 400, not reach a Postgres integer-id
+  // lookup and surface as a 500 (matches the kiosk session route's stricter validation).
+  it.each([
+    ['fractional', 1.5],
+    ['zero', 0],
+    ['negative', -3],
+    ['non-numeric string', 'abc'],
+  ])('rejects a %s id with 400', async (_label, badId) => {
+    const cookie = await loginCookie(kuratorEmail)
+    const res = await fetch('http://localhost:3000/api/fotobuch', {
+      method: 'POST', headers: { cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'event', id: badId }),
+    })
+    expect(res.status).toBe(400)
+  })
+
   it('produces a valid PDF for a kurator, with excludeIds only subtracting (hidden-person photo absent regardless)', async () => {
     const cookie = await loginCookie(kuratorEmail)
     const res = await fetch('http://localhost:3000/api/fotobuch', {

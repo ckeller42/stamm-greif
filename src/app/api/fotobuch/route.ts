@@ -62,11 +62,14 @@ export async function POST(req: Request): Promise<Response> {
     | null
   const type = body?.type as FotobuchTargetType | undefined
   const id = Number(body?.id)
-  if (!type || !['event', 'series', 'person'].includes(type) || !Number.isFinite(id)) {
+  // Number.isInteger rejects NaN/Infinity/fractional up front (mirrors the kiosk session route),
+  // and id > 0 rejects 0/negatives — those would otherwise reach a Postgres integer-id findByID
+  // and surface as a 500 instead of this clean 400 (consent audit C6).
+  if (!type || !['event', 'series', 'person'].includes(type) || !Number.isInteger(id) || id <= 0) {
     return new Response('Bad request', { status: 400 })
   }
   const excludeIds = Array.isArray(body?.excludeIds)
-    ? (body!.excludeIds as unknown[]).map(Number).filter(Number.isFinite)
+    ? (body!.excludeIds as unknown[]).map(Number).filter((n) => Number.isInteger(n) && n > 0)
     : []
 
   const payload = await getPayload({ config })
