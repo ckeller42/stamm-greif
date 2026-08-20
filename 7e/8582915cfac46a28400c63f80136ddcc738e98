@@ -1,0 +1,35 @@
+docs/betrieb.md
+  s_66eef1a01fc814::t_6c84fc93ad9cee 390-399
+Caddyfile.localhost
+  s_66eef1a01fc814::t_92ced8d9569795 12
+src/lib/telemetry.ts
+  s_66eef1a01fc814::t_c97b26980fa672 23-28,31
+Caddyfile
+  s_66eef1a01fc814::t_718840ba9a624b 8
+tests/int/fotobuch.int.test.ts
+  s_66eef1a01fc814::t_1c4e636f3e95ba 145-160
+tests/unit/telemetry.test.ts
+  s_66eef1a01fc814::t_c5dd0363c78c37 27-43
+src/app/api/fotobuch/route.ts
+  s_66eef1a01fc814::t_6aafc4e2b6a186 65-68,72
+src/messages/de.ts
+  s_66eef1a01fc814::t_29544378d5e800 80-83
+src/payload-types.ts
+  s_66eef1a01fc814::t_2fc92adc54eb5d 258
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.23",
+  "base_commit_sha": "7e8582915cfac46a28400c63f80136ddcc738e98",
+  "prompts": {},
+  "sessions": {
+    "s_66eef1a01fc814": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fc9b0fdf-4323-4e3e-a9d8-720992d4cff6",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Christoph Keller <christoph.keller@gmx.net>"
+    }
+  }
+}
