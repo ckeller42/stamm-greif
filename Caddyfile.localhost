@@ -9,7 +9,7 @@
 		format filter {
 			wrap json
 			fields {
-				request>uri regexp (/einladung/)[^/?#]+ ${1}[token]
+				request>uri regexp (/einladung/|[?&](?:k|d)=)[^/?#&]+ ${1}[token]
 			}
 		}
 	}

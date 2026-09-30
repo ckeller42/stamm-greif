@@ -20,11 +20,15 @@ export function newErrorId(): string {
   return crypto.randomBytes(3).toString('hex')
 }
 
-// Redacts invite tokens from logged URLs/paths so a leaked log line can't be used to accept
-// someone else's invite. `/einladung/<token>` → `/einladung/[token]`; query/hash untouched.
+// Redacts bearer tokens from logged URLs/paths so a leaked log line can't be replayed. Covers
+// both token shapes this app puts in URLs:
+//   • invite tokens in the path — `/einladung/<token>`
+//   • kiosk signed tokens in the query — `?k=<token>` (the /kiosk session link) and `?d=<token>`
+//     (per-photo /api/kiosk/image and /api/kiosk/download), each a live-consent-checked bearer.
+// One combined pattern: group 1 is the prefix (kept), the token that follows it becomes [token].
 export function sanitizeUrl(url: string | undefined): string | undefined {
   if (url === undefined) return undefined
-  return url.replace(/(\/einladung\/)[^/?#]+/, '$1[token]')
+  return url.replace(/(\/einladung\/|[?&](?:k|d)=)[^/?#&]+/g, '$1[token]')
 }
 
 export function recordError(entry: { errorId: string; msg: string; [k: string]: unknown }): void {

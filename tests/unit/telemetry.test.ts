@@ -24,6 +24,23 @@ describe('sanitizeUrl', () => {
     expect(sanitizeUrl('/anmelden')).toBe('/anmelden')
   })
 
+  // C5 (consent audit): kiosk signed bearer tokens ride in ?k= / ?d= query params.
+  it('redacts the kiosk session token (?k=)', () => {
+    expect(sanitizeUrl('/kiosk?k=eyJzaWQ.abc.def')).toBe('/kiosk?k=[token]')
+  })
+
+  it('redacts the kiosk image/download token (?d=) and keeps other params', () => {
+    expect(sanitizeUrl('/api/kiosk/image?d=eyJwaWQ.sig&x=1')).toBe('/api/kiosk/image?d=[token]&x=1')
+  })
+
+  it('redacts a token in a &-position param too', () => {
+    expect(sanitizeUrl('/api/kiosk/download?foo=1&d=secrettoken')).toBe('/api/kiosk/download?foo=1&d=[token]')
+  })
+
+  it('does not touch unrelated single-letter params (e.g. ?q=)', () => {
+    expect(sanitizeUrl('/suche?q=zeltlager')).toBe('/suche?q=zeltlager')
+  })
+
   it('passes through undefined', () => {
     expect(sanitizeUrl(undefined)).toBeUndefined()
   })

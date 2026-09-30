@@ -255,7 +255,7 @@ export interface Photo {
   duplicateOf?: (number | null) | Photo;
   duplicateSuspected?: boolean | null;
   /**
-   * Nur für den öffentlichen Beamer/Kiosk freigeben, was wirklich öffentlich gezeigt werden darf. Niemals Fotos von Minderjährigen oder mitglieder-interne Fotos markieren — der Kiosk ist ohne Anmeldung sichtbar. Verborgene, unveröffentlichte oder gelöschte Fotos erscheinen ohnehin nie, auch wenn sie hier markiert sind.
+   * Nur für den öffentlichen Beamer/Kiosk freigeben, was wirklich öffentlich gezeigt werden darf. Niemals Fotos von Minderjährigen oder mitglieder-interne Fotos markieren — der Kiosk ist ohne Anmeldung sichtbar. Verborgene, unveröffentlichte oder gelöschte Fotos erscheinen ohnehin nie, auch wenn sie hier markiert sind. ACHTUNG: Die Bildunterschrift (Beschreibung) wird auf dem Beamer öffentlich mitangezeigt und ist freier Text — nenne dort keine Namen von Personen, die nicht einwilligen (dieser Schutz greift nur bei markierten/verborgenen Personen, nicht bei frei getipptem Text).
    */
   kioskFreigegeben?: boolean | null;
   updatedAt: string;
